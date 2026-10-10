@@ -1,0 +1,127 @@
+# dsh-tool-activator
+
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![bundle][bundle-src]][bundle-href]
+[![JSDocs][jsdocs-src]][jsdocs-href]
+[![License][license-src]][license-href]
+
+为 DeepSeek Harness (DSH) 减少初始工具上下文：默认仅展示基础工具，其余工具通过 `activate_tools` 按需加载。
+
+* **系统要求**：DSH $\ge$ `0.2.0-rc.2`；Node.js $\ge$ `22.19.0`。
+* **交付状态**：当前为源码交付，未发布 npm 包。
+* **定位声明**：本插件**不是权限系统**，仅影响模型可见的 schema 和提示词，不替代核心审批与沙箱机制。
+
+---
+
+## 核心行为
+
+默认基础工具为 `read`、`glob`、`grep`、`skill`、`ask_user_question`、`todo_write`。
+
+| 运行状态 | 模型可见内容 |
+| --- | --- |
+| `automatic`（默认） | 基础工具、已激活工具、`activate_tools`，以及其余工具的 `<available_tools>` 简述目录 |
+| `manual` | 仅基础工具（无发现目录或 `activate_tools`） |
+| `enabled: false` | 禁用过滤，完全移除激活入口 |
+
+### 默认启用的工具
+
+`read`、`glob`、`grep`、`skill`、`ask_user_question`、`todo_write`
+
+### 可通过 `activate_tools` 加载的工具
+
+其余已安装且在当前 agent 作用域可见的工具默认隐藏，由模型按标识激活。常见内置工具：
+
+| 分类 | 工具标识 |
+| --- | --- |
+| 文件写入 | `write`、`edit` |
+| 命令执行 | `bash`、`pwsh` |
+| 联网 | `web_search`、`web_fetch` |
+| 后台任务 | `job_output`、`job_list`、`job_kill` |
+| 终端 | `terminal_open`、`terminal_send`、`terminal_read`、`terminal_signal`、`terminal_close`、`terminal_list` |
+| 目标 | `get_goal`、`create_goal`、`update_goal` |
+| 会话检索 | `session_search`、`session_event_search`、`session_trace`、`session_event_trace`、`session_event_read` |
+| 代码智能 | `lsp` |
+| 编排 | `subagent`、`subagent_fork`、`workflow`、`ralph`、`structured_output` |
+
+此外，任意已安装插件的工具都可作为标识请求；开启 `autoGroupMcp` 时，`mcp__server__tool` 还会按 server 聚合为 `mcp.server`。
+
+实际可用集合以当次 `<available_tools>` 目录为准：未知、已移除、作用域不可见或被 `excludedTools` 排除的标识不会因此被注册或授权。该目录随提示词注入给模型，只有标识、名称和一句简述：
+
+```xml
+<available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">
+  <tool identifier="web_search" name="web_search">Search the public web for current information.</tool>
+  <tool identifier="mcp.mail" name="mail">send: Send a message through the mailbox.</tool>
+</available_tools>
+```
+
+模型可按需请求加载工具或组：
+
+```json
+{
+  "identifiers": ["web_search", "web_fetch"],
+  "reason": "需要检索并核对用户要求的公开资料"
+}
+```
+
+---
+
+## 插件配置项
+
+在官方插件管理页的 `dsh-tool-activator#tool-activator` 中可配置：
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启用按需展示 |
+| `mode` | `automatic` | 运行模式 (`automatic` / `manual`) |
+| `basicTools` | 六个基础工具 | 默认直接展示的工具列表 |
+| `excludedTools` | `[]` | 不参与发现与激活的工具；**不是执行 deny list** |
+| `requireApproval` | `true` | 激活请求是否需经审批服务（仅 `allowed-once` 有效） |
+| `autoGroupMcp` | `true` | 按 server 聚合 `mcp__server__tool` 名称 |
+| `groups` | `[]` | 显式工具分组及说明 |
+| `sectionTools` | `{}` | 系统说明节到工具名的依赖映射 |
+
+---
+
+## 状态、审批与生命周期
+
+* **执行路由**：通过 DSH 原有 dispatcher 执行，不改变底层沙箱或运行路由。
+* **持久化与恢复**：已完成的激活状态随标准会话日志和 seed 恢复，不依赖中途内存状态。
+* **生命周期**：Cordis 负责注册、监听及 HMR 清理，卸载时自动清理样式与实例。
+
+---
+
+## 源码验证与交付边界
+
+根目录下可执行以下命令进行验证：
+
+```powershell
+$env:CI = 'true'
+node node_modules/eslint/bin/eslint.js . --fix
+node node_modules/typescript/bin/tsc --noEmit
+node node_modules/vitest/vitest.mjs run
+```
+
+* **测试情况**：已完成 5 次独立全量测试（包含 4 个 shuffle seed，共 12 个文件、313 个用例全部通过）。
+* **未验证项**：本次未执行 Build、真实 GUI E2E、打包发布及真实 profile 验证。
+
+---
+
+## 许可证
+
+MIT
+
+第三方声明见 [THIRD_PARTY_NOTICES.md](<THIRD_PARTY_NOTICES.md>)。
+
+<!-- Badges -->
+
+[npm-version-src]: https://img.shields.io/npm/v/dsh-tool-activator?style=flat&colorA=080f12&colorB=1fa669
+[npm-version-href]: https://npmjs.com/package/dsh-tool-activator
+[npm-downloads-src]: https://img.shields.io/npm/dm/dsh-tool-activator?style=flat&colorA=080f12&colorB=1fa669
+[npm-downloads-href]: https://npmjs.com/package/dsh-tool-activator
+[bundle-src]: https://img.shields.io/bundlephobia/minzip/dsh-tool-activator?style=flat&colorA=080f12&colorB=1fa669&label=minzip
+[bundle-href]: https://bundlephobia.com/result?p=dsh-tool-activator
+[jsdocs-src]: https://img.shields.io/badge/jsdocs-reference-080f12?style=flat&colorA=080f12&colorB=1fa669
+[jsdocs-href]: https://www.jsdocs.io/package/dsh-tool-activator
+[license-src]: https://img.shields.io/github/license/hairyf/dsh-tool-activator.svg?style=flat&colorA=080f12&colorB=1fa669
+[license-href]: https://github.com/hairyf/dsh-tool-activator/blob/main/LICENSE.md

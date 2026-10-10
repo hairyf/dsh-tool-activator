@@ -1,0 +1,119 @@
+{
+  "name": "dsh-tool-activator",
+  "type": "module",
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.15.1",
+  "description": "Load only basic DeepSeek Harness tools by default and activate other tools on demand.",
+  "author": "Hairy <wwu710632@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/hairyf/dsh-tool-activator#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hairyf/dsh-tool-activator.git"
+  },
+  "bugs": "https://github.com/hairyf/dsh-tool-activator/issues",
+  "keywords": ["dsh-plugin", "deepseek-harness", "tools", "tool-discovery"],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./client": "./dist/client.js",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "icon": "./icon.svg",
+  "files": [
+    "LICENSE.md",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "cordis.patch.yml",
+    "dist",
+    "docs/verification.md",
+    "icon.svg",
+    "licenses"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ],
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "lint": "eslint",
+    "prepack": "pnpm run build",
+    "release": "bumpp",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.2.0-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/cosmokit": "catalog:dsh",
+    "@deepseek-ai/schemastery": "catalog:dsh"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:cli",
+    "@deepseek-ai/cordis": "catalog:dsh",
+    "@deepseek-ai/dsh-agent": "catalog:dsh",
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "catalog:dsh",
+    "@deepseek-ai/dsh-client-ui-primitives": "catalog:dsh",
+    "@deepseek-ai/dsh-client-ui-renderer": "catalog:dsh",
+    "@deepseek-ai/dsh-client-ui-settings": "catalog:dsh",
+    "@deepseek-ai/dsh-client-ui-slots": "catalog:dsh",
+    "@deepseek-ai/dsh-invariants": "catalog:dsh",
+    "@deepseek-ai/dsh-llm": "catalog:dsh",
+    "@deepseek-ai/dsh-ptc-runtime": "catalog:dsh",
+    "@deepseek-ai/dsh-sandbox": "catalog:dsh",
+    "@deepseek-ai/dsh-sandbox-policy": "catalog:dsh",
+    "@deepseek-ai/dsh-scope": "catalog:dsh",
+    "@deepseek-ai/dsh-session": "catalog:dsh",
+    "@deepseek-ai/dsh-session-projection": "catalog:dsh",
+    "@deepseek-ai/dsh-skill": "catalog:dsh",
+    "@deepseek-ai/dsh-system-prompt": "catalog:dsh",
+    "@deepseek-ai/dsh-tools": "catalog:dsh",
+    "@deepseek-ai/dsh-user-approval": "catalog:dsh",
+    "@eslint-react/eslint-plugin": "catalog:cli",
+    "@gravity-ui/icons": "catalog:ui",
+    "@testing-library/dom": "catalog:testing",
+    "@testing-library/react": "catalog:testing",
+    "@types/node": "catalog:types",
+    "@types/react": "catalog:types",
+    "@types/react-dom": "catalog:types",
+    "bumpp": "catalog:cli",
+    "css-render": "catalog:ui",
+    "eslint": "catalog:cli",
+    "eslint-plugin-react-refresh": "catalog:cli",
+    "jsdom": "catalog:testing",
+    "publint": "catalog:cli",
+    "react": "catalog:ui",
+    "react-dom": "catalog:ui",
+    "tsdown": "catalog:cli",
+    "tsx": "catalog:cli",
+    "typescript": "catalog:cli",
+    "vite": "catalog:cli",
+    "vitest": "catalog:testing",
+    "zod": "catalog:validation"
+  }
+}
