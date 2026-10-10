@@ -39,6 +39,24 @@ function renderPage(scope: ConfigurationScope, load: () => Promise<ActivationCat
 }
 
 describe('tool configuration page', () => {
+  it('splits the catalog into default-activated and pending sections with counts', async () => {
+    renderPage(scopeOf({ basicTools: ['read'] }))
+
+    expect(await screen.findByText('默认激活工具（1 个）')).toBeTruthy()
+    expect(screen.getByText('已安装但需先激活（1 个）')).toBeTruthy()
+  })
+
+  it('moves a group into the default-activated section as soon as its switch is enabled', async () => {
+    renderPage(scopeOf({ basicTools: ['read'] }))
+
+    const mail = await screen.findByRole('switch', { name: '默认加载 mail' })
+    mail.click()
+
+    expect(await screen.findByText('默认激活工具（2 个）')).toBeTruthy()
+    expect(screen.getByText('已安装但需先激活（0 个）')).toBeTruthy()
+    expect(screen.getByText('全部工具都已默认激活。')).toBeTruthy()
+  })
+
   it('lists every catalog entry with the switch reflecting the default-loaded set', async () => {
     renderPage(scopeOf({ basicTools: ['read'] }))
 
