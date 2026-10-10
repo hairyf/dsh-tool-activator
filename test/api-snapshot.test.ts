@@ -10,7 +10,7 @@ describe('source distribution contracts', () => {
     expect(Object.keys(host).sort()).toEqual(['Config', 'apply', 'inject', 'name'])
     expect(host.inject).toEqual(['tools', 'systemPrompt', 'agents', 'sessionProjections'])
     expect(host.name).toBe('tool-activator')
-    expect(host.Config({}).get().basicTools).toEqual(['read', 'glob', 'grep', 'skill', 'ask_user_question', 'todo_write'])
+    expect(host.Config({}).get().basicTools).toEqual(['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write'])
   })
 
   it('exports only the official client lifecycle and service dependencies', () => {

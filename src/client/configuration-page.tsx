@@ -71,7 +71,13 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     const pending: ActivationCatalogEntry[] = []
     for (const entry of entries)
       (isBaseTool(entry, baseTools) || isDefaultLoaded(entry, basicTools) ? active : pending).push(entry)
-    return { active, pending }
+    // The plugin's own base tools head their section; everything the user added
+    // after them, each group alphabetical.
+    const byBaseThenName = (left: ActivationCatalogEntry, right: ActivationCatalogEntry): number => {
+      const rank = Number(isBaseTool(right, baseTools)) - Number(isBaseTool(left, baseTools))
+      return rank !== 0 ? rank : left.name.localeCompare(right.name)
+    }
+    return { active: active.sort(byBaseThenName), pending: pending.sort(byBaseThenName) }
   }, [basicTools, catalog])
 
   const toggle = useCallback(async (entry: ActivationCatalogEntry, next: boolean): Promise<void> => {

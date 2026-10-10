@@ -40,6 +40,25 @@ function renderPage(scope: ConfigurationScope, load: () => Promise<ActivationCat
 }
 
 describe('tool configuration page', () => {
+  it('lists the base tools before the tools the user added to the defaults', async () => {
+    const custom: ActivationCatalog = {
+      enabled: true,
+      baseTools: ['read'],
+      basicTools: ['read', 'mcp__mail__send', 'mcp__mail__list', 'zeta'],
+      entries: [
+        { identifier: 'zeta', name: 'zeta', description: 'zeta tool', tools: ['zeta'] },
+        { identifier: 'read', name: 'read', description: 'Read a file', tools: ['read'] },
+        { identifier: 'mcp.mail', name: 'mail', description: 'mailbox group', tools: ['mcp__mail__send', 'mcp__mail__list'] },
+      ],
+    }
+    renderPage(scopeOf({ basicTools: custom.basicTools }), async () => custom)
+
+    const names = (await screen.findAllByRole('listitem')).map(item => item.textContent)
+    expect(names[0]).toContain('read')
+    expect(names[1]).toContain('mail')
+    expect(names[2]).toContain('zeta')
+  })
+
   it('shows each tool description instead of repeating its name', async () => {
     renderPage(scopeOf({ basicTools: ['read'] }))
 
