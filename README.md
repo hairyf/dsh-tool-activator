@@ -70,12 +70,15 @@
 
 进入官方插件管理页，打开 `dsh-tool-activator` 卡片，配置表单直接显示在该插件的页面上（公开 **`plugins.bundle.config`** 槽，key 为包名 `dsh-tool-activator`），不需要再点进某一行的"配置"。
 
+<img height="800" alt="image" src="https://github.com/user-attachments/assets/55d7b574-5a05-4892-9567-fd9d3310c566" />
+
+
 表单只有一份工具列表：
 
 | 分区 | 含义 |
 | --- | --- |
 | **默认激活工具（N 个）** | 每次请求都带完整 schema 的工具；插件自带的八个基础工具固定在此区并排在最前，标题右侧带"基础工具"标记，开关为禁用，不允许关闭 |
-| **已安装但需先激活（M 个）** | 其余工具，模型用 `activate_tools` 按需获取 |
+| **按需激活（M 个）** | 其余工具，模型用 `activate_tools` 按需获取 |
 
 打开某一项的开关即把它写进 `basicTools`（默认加载），关闭则移回按需区；工具清单与描述由宿主 Remote `toolActivator/catalog` 提供，覆盖当前所有 live agent 作用域。
 
