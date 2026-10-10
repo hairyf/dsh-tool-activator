@@ -1,4 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { ToolPolicy } from './shared'
 import type { ActivationCatalog } from './types'
 import { buildToolCatalog } from './catalog'
@@ -14,12 +16,33 @@ const REMOTE_METHODS = '@deepseek-ai/dsh-typert-protocol/remote-methods'
 export class ToolActivatorRemote {
   constructor(private readonly ctx: Context, private readonly policy: () => ToolPolicy) {}
 
+  /**
+   * Every tool this installation can expose. A scope-less read only sees the
+   * global registry, so the live agents' scopes are unioned in: those are the
+   * tools a session can actually reach.
+   */
+  private schemas(): ToolSchema[] {
+    const byName = new Map<string, ToolSchema>()
+    for (const schema of this.ctx.tools.schemas())
+      byName.set(schema.name, schema)
+    for (const agent of this.agents()) {
+      for (const schema of this.ctx.tools.schemas(agent))
+        byName.set(schema.name, schema)
+    }
+    return [...byName.values()]
+  }
+
+  private agents(): Agent[] {
+    const list = this.ctx.agents.list
+    return typeof list === 'function' ? list.call(this.ctx.agents) : []
+  }
+
   catalog(): ActivationCatalog {
     const policy = this.policy()
     return {
       enabled: policy.enabled,
       basicTools: [...policy.basicTools],
-      entries: buildToolCatalog(this.ctx.tools.schemas(), policy).map(entry => ({
+      entries: buildToolCatalog(this.schemas(), policy).map(entry => ({
         identifier: entry.identifier,
         name: entry.name,
         description: entry.description,

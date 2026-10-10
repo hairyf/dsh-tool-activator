@@ -11,6 +11,10 @@ function readBasicTools(scope: ConfigurationScope): string[] {
   return Array.isArray(list) ? list.filter((name): name is string => typeof name === 'string') : []
 }
 
+function hasStoredBasicTools(scope: ConfigurationScope): boolean {
+  return Array.isArray(scope.getSnapshot().value?.basicTools)
+}
+
 function isDefaultLoaded(entry: ActivationCatalogEntry, basicTools: readonly string[]): boolean {
   return entry.tools.length > 0 && entry.tools.every(tool => basicTools.includes(tool))
 }
@@ -38,8 +42,13 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     let cancelled = false
     loadToolCatalog()
       .then((next) => {
-        if (!cancelled)
-          setCatalog(next)
+        if (cancelled)
+          return
+        setCatalog(next)
+        // The stored document may carry no basicTools field at all; the host's
+        // live policy is then the only source for what is currently default.
+        if (hasStoredBasicTools(configScope) === false)
+          setBasicTools(next.basicTools)
       })
       .catch((problem: unknown) => {
         if (!cancelled)
@@ -48,7 +57,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     return () => {
       cancelled = true
     }
-  }, [loadToolCatalog])
+  }, [configScope, loadToolCatalog])
 
   const groups = useMemo(() => {
     const entries = catalog?.entries ?? []

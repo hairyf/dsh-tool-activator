@@ -57,6 +57,13 @@ describe('tool configuration page', () => {
     expect(screen.getByText('全部工具都已默认激活。')).toBeTruthy()
   })
 
+  it('seeds the default-loaded set from the host policy when the document has no basicTools', async () => {
+    renderPage(scopeOf({}))
+
+    expect(await screen.findByText('默认激活工具（1 个）')).toBeTruthy()
+    expect(screen.getByText('已安装但需先激活（1 个）')).toBeTruthy()
+  })
+
   it('lists every catalog entry with the switch reflecting the default-loaded set', async () => {
     renderPage(scopeOf({ basicTools: ['read'] }))
 
