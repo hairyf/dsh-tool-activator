@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { CssRender } from 'css-render'
 import { describe, expect, it } from 'vitest'
 import * as client from '../src/client/index'
 import * as host from '../src/index'
@@ -28,6 +29,16 @@ describe('source distribution contracts', () => {
     expect(manifest.dsh.client.inject).toEqual(['@deepseek-ai/dsh-client-ui-renderer', '@deepseek-ai/dsh-client-ui-plugin-manager'])
     expect(manifest.scripts.test).toBe('vitest run')
     expect(manifest.files).not.toContain('source')
+  })
+
+  it('takes the css-render factory from its named export', async () => {
+    // The client bundle is CJS: node-mode interop overwrites a CJS dependency's
+    // `default` with the module object, so a default import is not callable at
+    // runtime even though it type-checks.
+    const styles = await readFile(new URL('src/client/styles.ts', root), 'utf8')
+    expect(styles).toContain('import { CssRender } from \'css-render\'')
+    expect(styles).not.toContain('import CssRender from \'css-render\'')
+    expect(typeof CssRender).toBe('function')
   })
 
   it('shares the official row identity and a local safe SVG', async () => {

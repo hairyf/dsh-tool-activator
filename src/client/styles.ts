@@ -1,4 +1,7 @@
-import CssRender from 'css-render'
+// The client bundle is emitted as CJS, and node-mode interop replaces a CJS
+// dependency's `default` with the module object, so the default import would
+// resolve to a non-callable value at runtime. The named export survives.
+import { CssRender } from 'css-render'
 import { CLASSES, STYLE_ID } from './constants'
 
 export function mountToolActivatorStyles(): () => void {
