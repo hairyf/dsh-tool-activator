@@ -102,7 +102,7 @@ node node_modules/typescript/bin/tsc --noEmit
 node node_modules/vitest/vitest.mjs run
 ```
 
-* **测试情况**：已完成 5 次独立全量测试（包含 4 个 shuffle seed，共 12 个文件、313 个用例全部通过）。
+* **测试情况**：已完成 5 次独立全量测试（包含 4 个 shuffle seed）；配置界面重做为工具开关后，当前 11 个文件、288 个用例再次全部通过。
 * **未验证项**：本次未执行 Build、真实 GUI E2E、打包发布及真实 profile 验证。
 
 ---

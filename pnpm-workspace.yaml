@@ -52,7 +52,6 @@ catalogs:
     '@types/react-dom': ^19.3.0
   ui:
     '@gravity-ui/icons': ^2.22.0
-    css-render: ^0.15.14
     react: ^19.3.0
     react-dom: ^19.3.0
 

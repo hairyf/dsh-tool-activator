@@ -14,7 +14,7 @@
 - `tsc --noEmit`：退出码 `0`。
 - `git diff --check`：退出码 `0`；Windows LF/CRLF 提示不是测试失败。
 - `pnpm install --ignore-scripts --frozen-lockfile`：退出码 `0`，确认 lockfile 可复用，未执行任何 lifecycle script。
-- 完整测试共 **12 个文件、313 个用例**，连续五次独立进程全部通过：标准顺序一次，以及 shuffle seeds `20261010`、`20261011`、`20261012`、`20261013` 各一次。
+- 完整测试共 **12 个文件、313 个用例**，连续五次独立进程全部通过：标准顺序一次，以及 shuffle seeds `20261010`、`20261011`、`20261012`、`20261013` 各一次。该批测试早于配置界面重做；重做后删除旧表单用例，当前为 **11 个文件、288 个用例**，lint 与类型检查同样通过。
 - 完成下述 mutation 并恢复源码后，再次完整运行通过 **12 个文件、313 个用例**，并重新通过 lint 和类型检查。
 
 [Vitest 配置](<../vitest.config.ts>)分别运行 node 宿主和 jsdom 客户端项目，没有 watch 模式或 Build 前置步骤。

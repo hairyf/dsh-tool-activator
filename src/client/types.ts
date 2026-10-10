@@ -1,36 +1,28 @@
-import type { ConfigPageForm, PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
-import type { ToolPolicy } from '../shared'
+import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
+import type { ActivationCatalog } from '../types'
 
-export type ToolActivatorConfigurationProps = PluginConfigViewProps
-
-export interface ToolPolicyDraft {
-  enabled: boolean
-  mode: ToolPolicy['mode']
-  basicToolsText: string
-  excludedToolsText: string
-  requireApproval: boolean
-  autoGroupMcp: boolean
-  groupsText: string
-  sectionToolsText: string
+export interface ConfigurationOp {
+  op: 'set'
+  path: string[]
+  value: unknown
 }
 
-export type PolicyDraftValidation
-  = | { ok: true, policy: ToolPolicy }
-    | { ok: false, message: string }
-
-export interface ConfigurationFeedback {
-  kind: 'success' | 'error'
-  message: string
-}
-
-export interface ConfigurationEditorState {
-  mutate: ConfigPageForm['mutate'] | undefined
-  writable: boolean
-  value: Record<string, unknown> | undefined
+export interface ConfigurationScopeSnapshot {
+  mode: 'host' | 'memory'
   revision: number | undefined
-  draft: ToolPolicyDraft
-  pending: boolean
-  feedback: ConfigurationFeedback | undefined
+  status: 'loading' | 'ready' | 'unavailable'
+  value: Record<string, unknown> | undefined
+  writable: boolean
 }
 
-export type ConfigMutationOps = Parameters<ConfigPageForm['mutate']>[0]
+/** The config form handle the platform hands to one settings entry. */
+export interface ConfigurationScope {
+  getSnapshot: () => ConfigurationScopeSnapshot
+  mutate: (ops: readonly ConfigurationOp[], expectedRevision?: number) => Promise<boolean>
+  subscribe: (listener: () => void) => () => void
+}
+
+export interface ToolActivatorConfigurationProps extends PluginConfigViewProps {
+  configScope: ConfigurationScope
+  loadToolCatalog: () => Promise<ActivationCatalog>
+}

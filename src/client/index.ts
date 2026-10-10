@@ -1,17 +1,29 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ActivationCatalog } from '../types'
+import type { ConfigurationScope } from './types'
+import { loadToolCatalog } from './catalog'
 import { ToolActivatorConfiguration } from './configuration-page'
-import { CONFIGURATION_ID, CONFIGURATION_PRIORITY, CONFIGURATION_REGISTRANT, CONFIGURATION_SLOT } from './constants'
+import { CONFIGURATION_ENTRY_ID, CONFIGURATION_KEY, CONFIGURATION_REGISTRANT, CONFIGURATION_SLOT } from './constants'
 import { mountToolActivatorStyles } from './styles'
 
 export const inject = ['slots']
 
+/**
+ * The configuration lives on this bundle's own page in the Plugins manager, so
+ * the page itself owns the settings handle the platform exposes per entry.
+ */
 export function apply(ctx: Context): void {
   ctx.effect(mountToolActivatorStyles)
-  ctx.slots.inject(CONFIGURATION_SLOT, () => ctx.slots.register({
-    name: CONFIGURATION_SLOT,
-    key: CONFIGURATION_ID,
-    registrant: CONFIGURATION_REGISTRANT,
-    priority: CONFIGURATION_PRIORITY,
-  }, ToolActivatorConfiguration))
+  ctx.inject(['configForms'], (branch) => {
+    const configScope = branch.configForms.get(CONFIGURATION_ENTRY_ID) as unknown as ConfigurationScope
+    const loadCatalog = (): Promise<ActivationCatalog> => loadToolCatalog(branch)
+    branch.slots.inject(CONFIGURATION_SLOT, () => branch.slots.register({
+      name: CONFIGURATION_SLOT,
+      key: CONFIGURATION_KEY,
+      registrant: CONFIGURATION_REGISTRANT,
+      inject: () => ({ configScope, loadToolCatalog: loadCatalog }),
+    } as never, ToolActivatorConfiguration))
+  })
 }

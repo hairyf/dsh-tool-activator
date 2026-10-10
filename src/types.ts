@@ -104,3 +104,16 @@ export interface ActivationCommit {
   activatedToolIds: string[]
   activatedSkills: ActivatedSkillInfo[]
 }
+
+export interface ActivationCatalogEntry {
+  identifier: string
+  name: string
+  description: string
+  tools: string[]
+}
+
+export interface ActivationCatalog {
+  enabled: boolean
+  basicTools: string[]
+  entries: ActivationCatalogEntry[]
+}

@@ -23,7 +23,6 @@
 | `@deepseek-ai/schemastery` | 3.18.4 | Copyright (c) 2021-present Shigma；[MIT 原文](<licenses/Schemastery-MIT.txt>) |
 | `@deepseek-ai/cosmokit` | 1.8.5 | Copyright (c) 2021-present Shigma；与 schemastery 相同的 MIT 条款，见[MIT 原文](<licenses/Schemastery-MIT.txt>)。仅用于 schemastery 公开类型中 `Dict` / `Volatile` 的可移植引用 |
 | `zod` | 4.4.3 | Copyright (c) 2025 Colin McDonnell；[MIT 原文](<licenses/Zod-MIT.txt>) |
-| `css-render` | 0.15.14 | 已安装 package manifest 声明 MIT，但该包未包含独立许可全文；不能据此臆造 copyright notice。实际发布前需取得对应上游许可与所有被捆绑部分的 notice |
 
 其它开发/运行依赖以[包声明](<package.json>)和[依赖锁](<pnpm-lock.yaml>)为准；仅使用接口不等于其独立许可已被本项目替换。没有执行 Build，尚不能断言最终 bundle 具体包含哪些第三方代码。对最终产物、直接与传递依赖的完整版权/许可 inventory，仍需在准备发行时单独核查。
 

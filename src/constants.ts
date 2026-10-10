@@ -4,6 +4,7 @@ export const ACTIVATION_VERSION = 1
 export const ACTIVATION_PROJECTION_KEY = 'tool-activator:activation'
 export const ACTIVATION_CONTEXT_NAME = 'tool-activator:context'
 export const ACTIVATION_CONTEXT_ORDER = 200
+export const SETTINGS_REMOTE_NAMESPACE = 'toolActivator'
 
 export const FIRST_PARTY_SECTION_TOOLS: Readonly<Record<string, readonly string[]>> = {
   'tool:read': ['read'],

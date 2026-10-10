@@ -16,6 +16,7 @@ import { validatePolicy } from './config'
 import { ACTIVATION_CONTEXT_NAME, ACTIVATION_CONTEXT_ORDER, ACTIVATION_PRODUCER, ACTIVATION_PROJECTION_KEY, ACTIVATION_VERSION, ACTIVATOR_TOOL_NAME } from './constants'
 import { emptyActivationHistory, foldActivationEvent, mergeActivation } from './history'
 import { filterPromptAssembly } from './prompt'
+import { provideToolActivatorRemote } from './remote'
 import { ActivatorExecutionRuntime } from './runtime'
 import { createActivatorTool } from './tool'
 import './session-projection'
@@ -75,6 +76,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     apply: foldActivationEvent,
   })
   ctx.tools.register(tool)
+  provideToolActivatorRemote(ctx, policySnapshot)
   ctx.systemPrompt.variable('tool_activator_context', () => '')
   ctx.systemPrompt.context({
     name: ACTIVATION_CONTEXT_NAME,

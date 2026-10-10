@@ -1,82 +1,49 @@
-// The client bundle is emitted as CJS, and node-mode interop replaces a CJS
-// dependency's `default` with the module object, so the default import would
-// resolve to a non-callable value at runtime. The named export survives.
-import { CssRender } from 'css-render'
-import { CLASSES, STYLE_ID } from './constants'
+import { CLASSES, STYLE_TAG_ID } from './constants'
+
+/**
+ * One stylesheet shipped as an owned `<style data-plugin-css>` tag, the
+ * convention the client module system records (`ClientModuleRecord.styles`) and
+ * drops with the bundle. No CSS-in-JS runtime is bundled: the plugin stays
+ * independent of any host application's styling stack. Colours come from the
+ * platform's design tokens, with plain fallbacks for a host that lacks them.
+ */
+const CSS = `
+.${CLASSES.root}{display:grid;gap:12px;color:var(--dsw-alias-label-primary,inherit);font-size:13px;line-height:20px}
+.${CLASSES.header}{display:grid;gap:2px}
+.${CLASSES.title}{margin:0;font-size:14px;font-weight:600;line-height:22px}
+.${CLASSES.description}{margin:0;color:var(--dsw-alias-label-secondary,inherit)}
+.${CLASSES.help}{margin:0;color:var(--dsw-alias-label-caption,inherit);font-size:12px;line-height:18px}
+.${CLASSES.error}{margin:0;color:var(--dsw-alias-state-error-primary,#d63e3e)}
+.${CLASSES.success}{margin:0;color:var(--dsw-alias-state-success-primary,inherit)}
+.${CLASSES.section}{display:grid;gap:8px}
+.${CLASSES.sectionTitle}{margin:0;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,inherit)}
+.${CLASSES.list}{display:grid;gap:0;margin:0;padding:0;list-style:none;border:.5px solid var(--dsw-alias-border-l4,rgba(127,127,127,.25));border-radius:16px;overflow:hidden}
+.${CLASSES.row}{display:flex;align-items:center;gap:12px;padding:10px 12px;border-top:.5px solid var(--dsw-alias-border-l4,rgba(127,127,127,.25))}
+.${CLASSES.row}:first-child{border-top:0}
+.${CLASSES.rowText}{display:grid;gap:2px;min-width:0;flex:1 1 auto}
+.${CLASSES.rowName}{font-weight:500;overflow-wrap:anywhere}
+.${CLASSES.rowMeta}{color:var(--dsw-alias-label-caption,inherit);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.dsh-tool-activator-switch{box-sizing:border-box;position:relative;flex:0 0 auto;width:36px;height:20px;padding:2px;border:0;border-radius:10px;background:var(--dsw-alias-border-l3,rgba(127,127,127,.4));cursor:pointer}
+.dsh-tool-activator-switch[aria-checked=true]{background:var(--dsw-alias-brand-primary,#4d6bfe)}
+.dsh-tool-activator-switch:disabled{cursor:default;opacity:.5}
+.dsh-tool-activator-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}
+.dsh-tool-activator-switch-thumb{display:block;width:16px;height:16px;border-radius:50%;background:var(--dsw-alias-label-primary-foreground,#fff);transition:transform .12s ease}
+.dsh-tool-activator-switch[aria-checked=true] .dsh-tool-activator-switch-thumb{transform:translate(16px)}
+`
+
+export function ownedStyleTag(): HTMLStyleElement | null {
+  return document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+}
 
 export function mountToolActivatorStyles(): () => void {
   if (typeof document === 'undefined')
     return () => {}
-  const cssr = CssRender()
-  if (cssr.find(STYLE_ID) !== null)
+  if (ownedStyleTag() !== null)
     return () => {}
-  const root = `.${CLASSES.root}`
-  const style = cssr.c([
-    cssr.c(root, {
-      color: 'inherit',
-      maxWidth: '54rem',
-      width: '100%',
-      padding: '1rem',
-      lineHeight: '1.6',
-    }, [
-      cssr.c('*, *::before, *::after', { boxSizing: 'border-box' }),
-      cssr.c('p', { margin: '0.5rem 0' }),
-      cssr.c('label, legend, summary', { fontWeight: '600' }),
-      cssr.c('legend', { padding: '0 0.35rem' }),
-      cssr.c('textarea, select', {
-        width: '100%',
-        padding: '0.6rem 0.75rem',
-        border: '1px solid color-mix(in srgb, currentColor 30%, transparent)',
-        borderRadius: '0.5rem',
-        color: 'inherit',
-        background: 'inherit',
-        font: 'inherit',
-      }),
-      cssr.c('textarea', { resize: 'vertical', fontFamily: 'ui-monospace, monospace' }),
-      cssr.c('input[type="checkbox"]', { accentColor: 'currentColor', width: '1rem', height: '1rem' }),
-      cssr.c('button', {
-        border: '1px solid color-mix(in srgb, currentColor 35%, transparent)',
-        borderRadius: '0.5rem',
-        padding: '0.55rem 0.9rem',
-        color: 'inherit',
-        background: 'color-mix(in srgb, currentColor 6%, transparent)',
-        font: 'inherit',
-        cursor: 'pointer',
-      }),
-      cssr.c('button:hover:not(:disabled)', { background: 'color-mix(in srgb, currentColor 12%, transparent)' }),
-      cssr.c(':disabled', { opacity: '0.6', cursor: 'not-allowed' }),
-      cssr.c('fieldset:disabled', { opacity: '1' }),
-      cssr.c('input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible', {
-        outline: '2px solid currentColor',
-        outlineOffset: '3px',
-      }),
-    ]),
-    cssr.c(`${root} .${CLASSES.header}`, { display: 'flex', alignItems: 'flex-start', gap: '0.75rem', marginBottom: '1rem' }),
-    cssr.c(`${root} .${CLASSES.icon}`, { width: '1.5rem', height: '1.5rem', flexShrink: '0', marginTop: '0.3rem' }),
-    cssr.c(`${root} .${CLASSES.title}`, { margin: '0', fontSize: '1.25rem', lineHeight: '1.4' }),
-    cssr.c(`${root} .${CLASSES.description}`, { opacity: '0.8' }),
-    cssr.c(`${root} .${CLASSES.notice}`, {
-      borderLeft: '3px solid color-mix(in srgb, currentColor 55%, transparent)',
-      borderRadius: '0.25rem',
-      background: 'color-mix(in srgb, currentColor 5%, transparent)',
-      padding: '0.65rem 0.8rem',
-    }),
-    cssr.c(`${root} .${CLASSES.version}, ${root} .${CLASSES.help}`, { fontSize: '0.875rem', opacity: '0.8' }),
-    cssr.c(`${root} .${CLASSES.fields}`, { display: 'grid', gap: '0.8rem', border: '0', padding: '0', margin: '1rem 0', minWidth: '0' }),
-    cssr.c(`${root} .${CLASSES.field}`, { display: 'grid', gap: '0.35rem', minWidth: '0' }),
-    cssr.c(`${root} .${CLASSES.checkbox}`, { display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer' }),
-    cssr.c(`${root} .${CLASSES.advanced}`, { borderTop: '1px solid color-mix(in srgb, currentColor 20%, transparent)', paddingTop: '0.8rem' }, [
-      cssr.c('summary', { cursor: 'pointer', marginBottom: '0.8rem' }),
-      cssr.c(`.${CLASSES.field}`, { marginBottom: '1rem' }),
-    ]),
-    cssr.c(`${root} .${CLASSES.actions}`, { display: 'flex', flexWrap: 'wrap', gap: '0.65rem', marginTop: '1rem' }),
-    cssr.c(`${root} .${CLASSES.error}`, { color: 'var(--color-danger, #d63e3e)', fontWeight: '600' }),
-    cssr.c(`${root} .${CLASSES.success}`, { color: 'inherit', fontWeight: '600' }),
-  ])
-  style.mount({ id: STYLE_ID, head: true })
-  const ownedStyle = cssr.find(STYLE_ID)
-  return () => {
-    if (ownedStyle !== null && cssr.find(STYLE_ID) === ownedStyle)
-      style.unmount({ id: STYLE_ID })
-  }
+  const tag = document.createElement('style')
+  tag.dataset.plugin = 'dsh-tool-activator'
+  tag.dataset.pluginCss = STYLE_TAG_ID
+  tag.textContent = CSS
+  document.head.append(tag)
+  return () => tag.remove()
 }

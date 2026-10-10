@@ -43,6 +43,7 @@
   "dsh": {
     "client": {
       "inject": [
+        "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-plugin-manager"
       ],
@@ -102,7 +103,6 @@
     "@types/react": "catalog:types",
     "@types/react-dom": "catalog:types",
     "bumpp": "catalog:cli",
-    "css-render": "catalog:ui",
     "eslint": "catalog:cli",
     "eslint-plugin-react-refresh": "catalog:cli",
     "jsdom": "catalog:testing",

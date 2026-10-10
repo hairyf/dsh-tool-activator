@@ -12,7 +12,7 @@
 - `src/client/types.ts`：该插件客户端共享类型的唯一集中位置。
 - `src/client/constants.ts`：该插件客户端共享常量的唯一集中位置。
 - `src/client/icons.ts`：该插件客户端共享图标的唯一集中位置，图标只从 github.com/gravity-ui/icons 中获取。
-- `src/client/styles.ts`：该插件客户端 css-render 样式树和样式挂载函数。
+- `src/client/styles.ts`：该插件客户端样式挂载函数，输出单个自有 `<style data-plugin-css>` 标签。
 
 ## 基本技术约定
 
@@ -76,21 +76,16 @@ export const PANEL_STYLE_ID = 'dsh-tauri-panel-styles'
 
 组件文件只消费常量，不重复写共享字符串或数字。真正只使用一次且不表达协议的局部值可以保留在实现文件中。
 
-## 样式与 css-render 规则
+## 样式规则
 
-所有客户端自定义样式使用 [`css-render`](https://css-render.vercel.app/)：
+本插件是独立于桌面壳的 DSH 包，不引入任何 CSS-in-JS 运行时；样式是一段 CSS 文本，挂载为单个自有 `<style>` 标签，与其它 DSH 插件保持一致：
 
-- 不使用 React 静态 inline styles。
-- 不使用 `style.textContent`、手写 `<style>` 注入或 `raw` CSS 字符串绕过 css-render 对象树。
-- CSS 规则拆成 `CssRender().c(selector, properties, children)` 节点。
-- css-render 样式只允许在插件 `apply()` 生命周期中挂载。
-- 样式挂载函数命名为 `mount<Name>Styles`，返回 `() => void` disposer。
-- 样式安装和卸载必须由 `ctx.effect()` 管理。
-- 如果 style id 已由其他生命周期挂载，当前调用不得取得其所有权，也不得在 disposer 中卸载它。
-- hover、focus、active、disabled 等状态优先使用 CSS selector 或 modifier class。
-- 仅保留真正动态的几何值作为 CSS custom property，例如拖拽宽度。
-- 所有动态样式必须可在插件卸载时恢复，不得在 React render 中挂载全局样式。
-- style id 和 class name 使用插件前缀，跨插件协议使用的 class 名称必须保持兼容。
+- 不引入 `css-render` 等运行时样式库，也不使用 React 静态 inline styles。
+- 只创建一个 `<style>` 标签，带 `data-plugin="<包名>"` 与 `data-plugin-css="<包名>/<file>.css"`；平台按后者记录并在 bundle 卸载时清理。
+- 样式挂载函数命名为 `mount<Name>Styles`，返回 `() => void` disposer，并由 `ctx.effect()` 管理。
+- 已存在同 `data-plugin-css` 的标签时，本次调用不得取得其所有权；disposer 只移除本次创建的标签。
+- hover、focus、active、disabled 等状态使用 CSS selector 或 modifier class。
+- 选择器限定在自己的根 class 内，class 名使用插件前缀。
 
 标准模式：
 
@@ -98,18 +93,15 @@ export const PANEL_STYLE_ID = 'dsh-tauri-panel-styles'
 export function mountPanelStyles(): () => void {
   if (typeof document === 'undefined')
     return () => {}
-
-  const cssr = CssRender()
-  if (cssr.find(PANEL_STYLE_ID) !== null)
+  if (document.querySelector('style[data-plugin-css="dsh-panel/styles.css"]') !== null)
     return () => {}
 
-  const style = cssr.c([
-    cssr.c('.dshp-panel', {
-      display: 'flex',
-    }),
-  ])
-  style.mount({ id: PANEL_STYLE_ID, head: true })
-  return () => style.unmount({ id: PANEL_STYLE_ID })
+  const tag = document.createElement('style')
+  tag.dataset.plugin = 'dsh-panel'
+  tag.dataset.pluginCss = 'dsh-panel/styles.css'
+  tag.textContent = PANEL_CSS
+  document.head.append(tag)
+  return () => tag.remove()
 }
 ```
 
@@ -118,13 +110,13 @@ export function mountPanelStyles(): () => void {
 每个客户端插件的 `apply()` 应按以下顺序组织：
 
 1. 注册或安装 locale、运行时状态和协议服务。
-2. 通过 `ctx.effect()` 挂载 css-render 样式，并返回 disposer。
+2. 通过 `ctx.effect()` 挂载样式标签，并返回 disposer。
 3. 注册 slot 组件和 UI 行为。
 4. 通过 `ctx.effect()` 管理 MutationObserver、事件监听、定时器、hydration 和 DOM 补丁。
 
 命名按职责区分：
 
-- `mount*Styles`：挂载 css-render 样式并返回 disposer。
+- `mount*Styles`：挂载自有样式标签并返回 disposer。
 - `install*`：安装 locale、服务、observer、hydration 等运行时能力。
 - `register*`：注册 slot、组件或协议条目。
 - `apply`：插件唯一的总装配入口。
@@ -201,7 +193,7 @@ pnpm run build
 
 - [ ] 新增共享类型已放入对应 `src/client/types.ts`。
 - [ ] 新增共享常量已放入对应 `src/client/constants.ts`。
-- [ ] 样式全部由 css-render 对象节点生成。
+- [ ] 样式由单个带 `data-plugin-css` 的自有样式标签提供，未引入 CSS-in-JS 运行时。
 - [ ] 样式只在 `apply()` 的 effect 中挂载。
 - [ ] 样式 disposer、observer、listener、timer 均已清理。
 - [ ] slot 协议使用稳定 id、registrant 和显式 props 类型。

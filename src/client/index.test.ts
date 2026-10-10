@@ -1,17 +1,18 @@
 import type * as RendererModule from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ConfigurationScope } from './types'
 import * as cordis from '@deepseek-ai/cordis'
 import { Context } from '@deepseek-ai/cordis'
 import * as slots from '@deepseek-ai/dsh-client-ui-slots'
-import CssRender from 'css-render'
 import * as React from 'react'
 import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as JsxRuntime from 'react/jsx-runtime'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ToolActivatorConfiguration } from './configuration-page'
-import { CONFIGURATION_ID, CONFIGURATION_REGISTRANT, CONFIGURATION_SLOT, STYLE_ID } from './constants'
+import { CONFIGURATION_KEY, CONFIGURATION_REGISTRANT, CONFIGURATION_SLOT, STYLE_TAG_ID } from './constants'
 import * as plugin from './index'
+import { ownedStyleTag } from './styles'
 
 const modules: Readonly<Record<string, unknown>> = {
   'react': React,
@@ -46,7 +47,7 @@ const disposers: (() => void | Promise<void>)[] = []
 afterEach(async () => {
   for (const dispose of disposers.splice(0).reverse())
     await dispose()
-  CssRender().find(STYLE_ID)?.remove()
+  document.querySelectorAll('style[data-plugin-css]').forEach(tag => tag.remove())
 })
 
 afterAll(() => {
@@ -56,62 +57,93 @@ afterAll(() => {
     Reflect.deleteProperty(window, '__ModuleLoader__')
 })
 
+const scope: ConfigurationScope = {
+  getSnapshot: () => ({ mode: 'host', revision: 1, status: 'ready', value: {}, writable: true }),
+  mutate: vi.fn(async () => true),
+  subscribe: () => () => {},
+}
+
+async function provideConfigForms(ctx: Context): Promise<() => Promise<void>> {
+  const fiber = await ctx.plugin({
+    name: 'test-config-forms',
+    apply(owner: Context): void {
+      owner.provide('configForms', { get: () => scope })
+    },
+  })
+  return () => fiber.dispose()
+}
+
 function declareConfigurationSlot(ctx: Context): () => void {
   return ctx.slots.register({
     name: 'root',
     children: {
       [CONFIGURATION_SLOT]: { kind: 'keyed', scope: 'root' },
     },
-  }, ({ renderSlot }: PropsRenderSlots<typeof CONFIGURATION_SLOT>) => renderSlot(CONFIGURATION_SLOT, { view: 'page' }, { entryKey: CONFIGURATION_ID }))
+  }, ({ renderSlot }: PropsRenderSlots<typeof CONFIGURATION_SLOT>) => renderSlot(CONFIGURATION_SLOT, { view: 'page' }, { entryKey: CONFIGURATION_KEY }))
 }
 
-describe('official row configuration plugin lifecycle', () => {
-  it('registers only the stable official keyed slot and cleans up on unload', async () => {
-    const ctx = new Context()
-    const rendererFiber = await ctx.plugin(SlotRegistry)
-    disposers.push(() => rendererFiber.dispose())
+async function fixture(): Promise<Context> {
+  const ctx = new Context()
+  const rendererFiber = await ctx.plugin(SlotRegistry)
+  disposers.push(() => rendererFiber.dispose())
+  disposers.push(await provideConfigForms(ctx))
+  return ctx
+}
+
+describe('official bundle configuration lifecycle', () => {
+  it('registers the bundle keyed slot and cleans up on unload', async () => {
+    const ctx = await fixture()
     const disposeOwner = declareConfigurationSlot(ctx)
     const fiber = await ctx.plugin(plugin)
     disposers.push(() => fiber.dispose())
+
     const entries = ctx.slots.entries(CONFIGURATION_SLOT)
     expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({ options: { key: CONFIGURATION_ID }, registrant: CONFIGURATION_REGISTRANT, component: ToolActivatorConfiguration })
-    expect(CssRender().find(STYLE_ID)).not.toBeNull()
+    expect(entries[0]).toMatchObject({
+      options: { key: CONFIGURATION_KEY },
+      registrant: CONFIGURATION_REGISTRANT,
+      component: ToolActivatorConfiguration,
+    })
+    expect(ownedStyleTag()).not.toBeNull()
+    expect(ownedStyleTag()?.dataset.pluginCss).toBe(STYLE_TAG_ID)
+
     await fiber.dispose()
     expect(ctx.slots.entries(CONFIGURATION_SLOT)).toHaveLength(0)
-    expect(CssRender().find(STYLE_ID)).toBeNull()
+    expect(ownedStyleTag()).toBeNull()
     disposeOwner()
   })
 
   it('waits for the official owner declaration and reinstalls after owner reload', async () => {
-    const ctx = new Context()
-    const rendererFiber = await ctx.plugin(SlotRegistry)
-    disposers.push(() => rendererFiber.dispose())
+    const ctx = await fixture()
     const fiber = await ctx.plugin(plugin)
     disposers.push(() => fiber.dispose())
+
     expect(ctx.slots.entries(CONFIGURATION_SLOT)).toHaveLength(0)
     const disposeOwner = declareConfigurationSlot(ctx)
     expect(ctx.slots.entries(CONFIGURATION_SLOT)).toHaveLength(1)
+
     disposeOwner()
     expect(ctx.slots.entries(CONFIGURATION_SLOT)).toHaveLength(0)
     const disposeReplacement = declareConfigurationSlot(ctx)
     expect(ctx.slots.entries(CONFIGURATION_SLOT)).toHaveLength(1)
+
     await fiber.dispose()
     expect(ctx.slots.entries(CONFIGURATION_SLOT)).toHaveLength(0)
     disposeReplacement()
   })
 
   it('does not remove styles borrowed from another client instance on unload', async () => {
-    const ctx = new Context()
-    const rendererFiber = await ctx.plugin(SlotRegistry)
-    disposers.push(() => rendererFiber.dispose())
-    const externalStyle = CssRender().c(`.${STYLE_ID}`, { display: 'block' })
-    externalStyle.mount({ id: STYLE_ID, head: true })
-    const ownedElsewhere = CssRender().find(STYLE_ID)
+    const ctx = await fixture()
+    const externalStyle = document.createElement('style')
+    externalStyle.dataset.pluginCss = STYLE_TAG_ID
+    externalStyle.textContent = '.borrowed-style{display:block}'
+    document.head.append(externalStyle)
+
     const fiber = await ctx.plugin(plugin)
     disposers.push(() => fiber.dispose())
     await fiber.dispose()
-    expect(CssRender().find(STYLE_ID)).toBe(ownedElsewhere)
-    externalStyle.unmount({ id: STYLE_ID })
+
+    expect(ownedStyleTag()).toBe(externalStyle)
+    externalStyle.remove()
   })
 })

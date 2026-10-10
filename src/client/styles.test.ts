@@ -1,45 +1,47 @@
-import CssRender from 'css-render'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CLASSES, STYLE_ID } from './constants'
-import { mountToolActivatorStyles } from './styles'
+import { CLASSES, STYLE_TAG_ID } from './constants'
+import { mountToolActivatorStyles, ownedStyleTag } from './styles'
 
 afterEach(() => {
-  CssRender().find(STYLE_ID)?.remove()
+  ownedStyleTag()?.remove()
+  document.querySelectorAll('style[data-plugin-css]').forEach(tag => tag.remove())
 })
 
-describe('owned css-render style lifecycle', () => {
-  it('mounts scoped accessible styles and removes them through its disposer', () => {
+describe('owned style tag lifecycle', () => {
+  it('mounts one owned tag with scoped accessible rules and removes it through its disposer', () => {
     const dispose = mountToolActivatorStyles()
-    const mounted = CssRender().find(STYLE_ID)
+    const mounted = ownedStyleTag()
     expect(mounted).not.toBeNull()
     expect(mounted?.parentNode).toBe(document.head)
+    expect(mounted?.dataset.plugin).toBe('dsh-tool-activator')
+    expect(mounted?.dataset.pluginCss).toBe(STYLE_TAG_ID)
     expect(mounted?.textContent).toContain(`.${CLASSES.root}`)
     expect(mounted?.textContent).toContain('focus-visible')
     expect(mounted?.textContent).toContain(':disabled')
     dispose()
-    expect(CssRender().find(STYLE_ID)).toBeNull()
+    expect(ownedStyleTag()).toBeNull()
     dispose()
-    expect(CssRender().find(STYLE_ID)).toBeNull()
+    expect(ownedStyleTag()).toBeNull()
   })
 
-  it('never takes ownership of an existing style with the same id', () => {
+  it('never takes ownership of an existing tag with the same plugin id', () => {
     const first = mountToolActivatorStyles()
-    const original = CssRender().find(STYLE_ID)
+    const original = ownedStyleTag()
     const borrowed = mountToolActivatorStyles()
     borrowed()
-    expect(CssRender().find(STYLE_ID)).toBe(original)
+    expect(ownedStyleTag()).toBe(original)
     first()
-    expect(CssRender().find(STYLE_ID)).toBeNull()
+    expect(ownedStyleTag()).toBeNull()
   })
 
-  it('does not remove a replacement installed after its own style was removed', () => {
+  it('does not remove a replacement installed after its own tag was removed', () => {
     const first = mountToolActivatorStyles()
-    CssRender().find(STYLE_ID)?.remove()
+    ownedStyleTag()?.remove()
     const replacementDispose = mountToolActivatorStyles()
-    const replacement = CssRender().find(STYLE_ID)
+    const replacement = ownedStyleTag()
     first()
-    expect(CssRender().find(STYLE_ID)).toBe(replacement)
+    expect(ownedStyleTag()).toBe(replacement)
     replacementDispose()
-    expect(CssRender().find(STYLE_ID)).toBeNull()
+    expect(ownedStyleTag()).toBeNull()
   })
 })
