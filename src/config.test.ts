@@ -30,7 +30,7 @@ describe('config', () => {
     expect(result.get()).toEqual({
       enabled: true,
       mode: 'automatic',
-      basicTools: ['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write'],
+      basicTools: ['read', 'glob', 'grep', 'skill', 'ask_user_question', 'todo_write'],
       excludedTools: [],
       requireApproval: true,
       autoGroupMcp: true,
@@ -106,7 +106,7 @@ describe('config', () => {
 
     expect(first.basicTools).toEqual(['write'])
     expect(first.excludedTools).toEqual(['read'])
-    expect(second.basicTools).toEqual(['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write'])
+    expect(second.basicTools).toEqual(['read', 'glob', 'grep', 'skill', 'ask_user_question', 'todo_write'])
     expect(second.excludedTools).toEqual([])
   })
 })

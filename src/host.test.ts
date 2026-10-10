@@ -26,9 +26,6 @@ import * as plugin from './index'
 const cleanups: Array<() => unknown> = []
 /** Absolute on every platform; DSH rejects a session header whose cwd is not absolute. */
 const FIXTURE_CWD = join(tmpdir(), 'isolated-activator-fixture')
-/** Registered by the fixture but absent from `DEFAULT_POLICY.basicTools`, so it stays on-demand. */
-const DISCOVERABLE_TOOL = 'pwsh'
-const DISCOVERABLE_GUIDE = 'PWSh FULL GUIDE'
 
 class IntegrationPtcRuntime extends PtcRuntime {
   language = 'typescript'
@@ -43,7 +40,7 @@ class IntegrationPtcRuntime extends PtcRuntime {
     this.inputs.push(spec)
     const tools = spec.bindings.find(namespace => namespace.global === 'tools')!.functions
     try {
-      const value = await tools.activate_tools({ identifiers: [DISCOVERABLE_TOOL], reason: `Run ${DISCOVERABLE_TOOL}` })
+      const value = await tools.activate_tools({ identifiers: ['write'], reason: 'Write the requested file' })
       if (spec.program === 'activate then fail')
         return { logs: [], error: { kind: 'exception', message: 'The fixture program failed after activation' } }
       return { logs: [], value }
@@ -130,7 +127,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     },
   })
   services.push(fiber)
-  for (const name of ['read', 'write', 'glob', 'grep', DISCOVERABLE_TOOL, 'web_search']) {
+  for (const name of ['read', 'write', 'glob', 'grep']) {
     cleanups.push(ctx.tools.register(defineTool({
       name,
       description: `${name} description`,
@@ -141,8 +138,6 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   }
   for (const name of ['read', 'write'])
     cleanups.push(ctx.systemPrompt.section({ name: `tool:${name}`, order: 100, text: `${name.toUpperCase()} FULL GUIDE` }))
-  cleanups.push(ctx.systemPrompt.section({ name: `tool:${DISCOVERABLE_TOOL}`, order: 100, text: DISCOVERABLE_GUIDE }))
-  cleanups.push(ctx.systemPrompt.section({ name: 'tool:web_search', order: 100, text: 'WEB SEARCH FULL GUIDE' }))
   cleanups.push(ctx.systemPrompt.section({ name: 'host:safety', order: 1, text: 'HOST SAFETY NEVER REMOVED' }))
   cleanups.push(ctx.systemPrompt.context({ name: 'host:runtime', order: 1, text: 'HOST RUNTIME NEVER REMOVED' }))
   let turn = 0
@@ -247,62 +242,60 @@ describe('real rc.2 host contracts', () => {
     const { ctx, makeAgent } = await fixture()
     const { agent } = await makeAgent('initial')
     const initial = await presentation(ctx, agent)
-    expect(initial.names).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
-    expect(initial.text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" name="${DISCOVERABLE_TOOL}">${DISCOVERABLE_TOOL}: ${DISCOVERABLE_TOOL} description</tool>`)
+    expect(initial.names).toEqual(['activate_tools', 'glob', 'grep', 'read'])
+    expect(initial.text).toContain('<tool identifier="write" name="write">write: write description</tool>')
     expect(initial.text).toContain('READ FULL GUIDE')
-    expect(initial.text).toContain('WRITE FULL GUIDE')
-    expect(initial.text).not.toContain(DISCOVERABLE_GUIDE)
+    expect(initial.text).not.toContain('WRITE FULL GUIDE')
     expect(initial.text).toContain('HOST SAFETY NEVER REMOVED')
     expect(initial.text).toContain('HOST RUNTIME NEVER REMOVED')
-    expect(ctx.tools.get(DISCOVERABLE_TOOL, agent)).toBeDefined()
+    expect(ctx.tools.get('write', agent)).toBeDefined()
   })
 
   it('commits only a final native receipt and presents schemas plus instructions on the next request', async () => {
     const { ctx, makeAgent } = await fixture()
     const { agent, events } = await makeAgent('native')
-    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write the file' })
     expect(result.isError, JSON.stringify(result)).toBe(false)
     expect(receiptFromContent(result.content)).toMatchObject({
       producer: 'dsh-tool-activator',
       version: 1,
       authorized: true,
       approvalRequired: false,
-      commit: { callId: 'fixture-call', activatedToolIds: [DISCOVERABLE_TOOL], activatedSkills: [] },
-      state: { activatedTools: [{ identifier: DISCOVERABLE_TOOL, apiCount: 1, name: DISCOVERABLE_TOOL }], activatedSkills: [], alreadyActive: [], notFound: [] },
+      commit: { callId: 'fixture-call', activatedToolIds: ['write'], activatedSkills: [] },
+      state: { activatedTools: [{ identifier: 'write', apiCount: 1, name: 'write' }], activatedSkills: [], alreadyActive: [], notFound: [] },
     })
     expect(events.map(event => event.type)).toEqual(['turn/start', 'step/start', 'assistant/message', 'tool/call', 'tool/result'])
     const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
-    expect(enabled.text).toContain(DISCOVERABLE_GUIDE)
+    expect(enabled.names).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
+    expect(enabled.text).toContain('WRITE FULL GUIDE')
     expect(enabled.text.match(/WRITE FULL GUIDE/gu)).toHaveLength(1)
-    expect(enabled.text).toContain('<available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">\n  <tool identifier="web_search" name="web_search">web_search: web_search description</tool>\n</available_tools>')
-    expect(enabled.text).not.toContain(`<tool identifier="${DISCOVERABLE_TOOL}" name="${DISCOVERABLE_TOOL}">`)
-    const again = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL, 'missing'], reason: 'Check the tools' }, 'already-active')
-    expect(receiptFromContent(again.content)?.state).toEqual({ activatedTools: [], activatedSkills: [], alreadyActive: [DISCOVERABLE_TOOL], notFound: ['missing'] })
+    expect(enabled.text).not.toContain('<available_tools description=')
+    const again = await call(ctx, agent, 'activate_tools', { identifiers: ['write', 'missing'], reason: 'Check the tools' }, 'already-active')
+    expect(receiptFromContent(again.content)?.state).toEqual({ activatedTools: [], activatedSkills: [], alreadyActive: ['write'], notFound: ['missing'] })
   })
 
   it('does not activate from a successful execution until its durable call/result pair commits', async () => {
     const { ctx, makeAgent } = await fixture()
     const { agent } = await makeAgent('before-durable-result')
     const callId = ToolCallId('not-yet-logged')
-    startCall(agent.session, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, callId)
-    const result = await ctx.tools.execute({ agent, name: 'activate_tools', arguments: { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, callId, signal: new AbortController().signal })
+    startCall(agent.session, 'activate_tools', { identifiers: ['write'], reason: 'Write' }, callId)
+    const result = await ctx.tools.execute({ agent, name: 'activate_tools', arguments: { identifiers: ['write'], reason: 'Write' }, callId, signal: new AbortController().signal })
     expect(result.isError, JSON.stringify(result)).toBe(false)
-    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
+    expect((await presentation(ctx, agent)).names).not.toContain('write')
     agent.session.append('tool/result', { turn: 1, step: 1, message: createToolResultMessage({ callId, content: result.content, isError: result.isError }) }, { surfaceOp: 'append' })
-    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
+    expect((await presentation(ctx, agent)).names).toContain('write')
   })
 
   it('recovers activation from serialized history in a new session, but not an unrelated blank session', async () => {
     const { ctx, makeAgent } = await fixture()
     const original = await makeAgent('source-session')
-    await call(ctx, original.agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    await call(ctx, original.agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' })
     closeTurn(original.agent.session)
     const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
     const restored = await makeAgent('restored-session', serialized)
     const fresh = await makeAgent('fresh-session')
-    expect((await presentation(ctx, restored.agent)).names).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
-    expect((await presentation(ctx, fresh.agent)).names).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
+    expect((await presentation(ctx, restored.agent)).names).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
+    expect((await presentation(ctx, fresh.agent)).names).toEqual(['activate_tools', 'glob', 'grep', 'read'])
   })
 
   it('restores only the current restricted scope and refuses unavailable identifiers', async () => {
@@ -311,15 +304,15 @@ describe('real rc.2 host contracts', () => {
     const restriction = await agent.ctx.plugin({
       inject: ['tools'],
       apply(owner: Context): void {
-        owner.tools.restrict({ deny: [DISCOVERABLE_TOOL] })
+        owner.tools.restrict({ deny: ['write'] })
       },
     })
     cleanups.push(() => restriction.dispose())
-    expect((await presentation(ctx, agent)).text).not.toContain(`identifier="${DISCOVERABLE_TOOL}"`)
-    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Try the shell' })
-    expect(receiptFromContent(result.content)?.state.notFound).toEqual([DISCOVERABLE_TOOL])
-    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
-    const direct = await call(ctx, agent, DISCOVERABLE_TOOL, { path: 'script.ps1' }, 'denied-shell')
+    expect((await presentation(ctx, agent)).text).not.toContain('identifier="write"')
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Try write' })
+    expect(receiptFromContent(result.content)?.state.notFound).toEqual(['write'])
+    expect((await presentation(ctx, agent)).names).not.toContain('write')
+    const direct = await call(ctx, agent, 'write', { path: 'file.txt' }, 'denied-write')
     expect(direct.isError).toBe(true)
   })
 
@@ -327,30 +320,29 @@ describe('real rc.2 host contracts', () => {
     const { ctx, makeAgent } = await fixture({ policy: {
       basicTools: ['read'],
       excludedTools: ['grep'],
-      groups: [{ identifier: 'files', name: 'Files', description: 'File utilities', tools: ['pwsh', 'web_search', 'grep'], sections: ['plugin:files'] }],
-      sectionTools: { 'plugin:files': ['pwsh', 'web_search', 'grep'] },
+      groups: [{ identifier: 'files', name: 'Files', description: 'File utilities', tools: ['write', 'glob', 'grep'], sections: ['plugin:files'] }],
+      sectionTools: { 'plugin:files': ['write', 'glob', 'grep'] },
     } })
     cleanups.push(ctx.systemPrompt.section({ name: 'plugin:files', order: 110, text: 'SHARED HIDDEN GUIDE' }))
     const { agent } = await makeAgent('grouped')
     const result = await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use file utilities' })
     expect(receiptFromContent(result.content)?.state.activatedTools).toEqual([{ identifier: 'files', name: 'Files', apiCount: 2 }])
     const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'glob', 'pwsh', 'read', 'web_search', 'write'])
+    expect(enabled.names).toEqual(['activate_tools', 'glob', 'read', 'write'])
     expect(enabled.text).not.toContain('SHARED HIDDEN GUIDE')
     expect(enabled.text).toContain('WRITE FULL GUIDE')
-    expect(enabled.text).toContain('WEB SEARCH FULL GUIDE')
   })
 
   it('manual mode hides the activator, ignores restored activations, and disables explicit calls', async () => {
     const { ctx, makeAgent, setPolicy } = await fixture()
     const { agent } = await makeAgent('manual')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' })
     setPolicy({ mode: 'manual' })
     const manual = await presentation(ctx, agent)
-    expect(manual.names).toEqual(['glob', 'grep', 'read', 'write'])
-    expect(manual.text).not.toContain(DISCOVERABLE_GUIDE)
+    expect(manual.names).toEqual(['glob', 'grep', 'read'])
+    expect(manual.text).not.toContain('WRITE FULL GUIDE')
     expect(manual.text).not.toContain('<available_tools')
-    expect((await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'manual-call')).isError).toBe(true)
+    expect((await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' }, 'manual-call')).isError).toBe(true)
   })
 
   it('disabled mode restores the original presentation but never exposes its own tool', async () => {
@@ -358,31 +350,31 @@ describe('real rc.2 host contracts', () => {
     const { agent } = await makeAgent('disabled')
     setPolicy({ enabled: false })
     const disabled = await presentation(ctx, agent)
-    expect(disabled.names).toEqual(['glob', 'grep', DISCOVERABLE_TOOL, 'read', 'web_search', 'write'])
+    expect(disabled.names).toEqual(['glob', 'grep', 'read', 'write'])
     expect(disabled.text).toContain('WRITE FULL GUIDE')
     expect(disabled.text).not.toContain('# Tools Activator')
-    expect((await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })).isError).toBe(true)
+    expect((await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' })).isError).toBe(true)
   })
 
   it('rejects stale or mismatched agent scopes and leaves agentless diagnostic assembly untouched', async () => {
     const { ctx, makeAgent } = await fixture()
     const { agent } = await makeAgent('scope-identity')
     await expect(ctx.systemPrompt.assemble({ scope: {}, agent })).rejects.toThrow('exact agent scope')
-    expect((await ctx.systemPrompt.assemble()).tools.map(tool => tool.name)).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'web_search', 'write'])
+    expect((await ctx.systemPrompt.assemble()).tools.map(tool => tool.name)).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
     const stale = { ...agent }
     await expect(ctx.systemPrompt.assemble({ scope: stale, agent: stale })).rejects.toThrow('exact live agent')
-    expect((await call(ctx, stale, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })).isError).toBe(true)
+    expect((await call(ctx, stale, 'activate_tools', { identifiers: ['write'], reason: 'Write' })).isError).toBe(true)
   })
 
   it('keeps the user complete prompt while delivering activated docs exactly once through runtime context', async () => {
     const { ctx, makeAgent } = await fixture()
     cleanups.push(ctx.systemPrompt.section({ name: 'user:complete', order: 0, complete: true, text: 'USER COMPLETE PROMPT' }))
     const { agent } = await makeAgent('complete-prompt')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' })
     const assembly = await ctx.systemPrompt.assemble({ scope: agent, agent })
     expect(renderPrompt(assembly)).toBe('USER COMPLETE PROMPT')
-    expect(renderContextSnapshot(assembly)).toContain(DISCOVERABLE_GUIDE)
-    expect((renderPrompt(assembly) + renderContextSnapshot(assembly)).match(/PWSh FULL GUIDE/gu)).toHaveLength(1)
+    expect(renderContextSnapshot(assembly)).toContain('WRITE FULL GUIDE')
+    expect((renderPrompt(assembly) + renderContextSnapshot(assembly)).match(/WRITE FULL GUIDE/gu)).toHaveLength(1)
   })
 
   it('fails explicitly instead of silently removing schemas when runtime context is suppressed', async () => {
@@ -394,7 +386,7 @@ describe('real rc.2 host contracts', () => {
   it('unloads every registration and rebuilds durable state on plugin reload', async () => {
     const { ctx, fiber, makeAgent } = await fixture()
     const { agent } = await makeAgent('reload')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' })
     await fiber.dispose()
     expect(ctx.tools.get('activate_tools', agent)).toBeUndefined()
     expect(ctx.sessionProjections.stateOf(agent.session, 'tool-activator:activation')).toBeUndefined()
@@ -402,7 +394,7 @@ describe('real rc.2 host contracts', () => {
     expect(without.contexts.map(context => context.name)).not.toContain('tool-activator:context')
     const reloaded = await ctx.plugin({ inject: plugin.inject, apply: (owner: Context): void => plugin.apply(owner, Config({ requireApproval: false })) })
     cleanups.push(() => reloaded.dispose())
-    expect((await presentation(ctx, agent)).names).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
+    expect((await presentation(ctx, agent)).names).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
   })
 })
 
@@ -415,12 +407,12 @@ describe('real approval and final policy boundary', () => {
       return 'allowed-once'
     }))
     const { agent, events } = await makeAgent('approved')
-    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell after confirmation' })
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write after confirmation' })
     expect(result.isError, JSON.stringify(result)).toBe(false)
-    expect(requests).toEqual(['activate_tools:fixture-call:Run the shell after confirmation'])
+    expect(requests).toEqual(['activate_tools:fixture-call:Write after confirmation'])
     expect(events.map(event => event.type)).toEqual(['turn/start', 'step/start', 'assistant/message', 'tool/call', 'approval/asked', 'approval/decided', 'tool/result'])
     expect(receiptFromContent(result.content)?.approvalRequired).toBe(true)
-    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
+    expect((await presentation(ctx, agent)).names).toContain('write')
   })
 
   it.each(['missing-service', 'no-answerer', 'rejected', 'cancelled', 'unavailable', 'throwing-answerer'] as const)('fails closed with %s', async (outcome) => {
@@ -433,10 +425,10 @@ describe('real approval and final policy boundary', () => {
       }))
     }
     const { agent } = await makeAgent(`approval-${outcome}`)
-    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' })
     expect(result.isError).toBe(true)
     expect(receiptFromContent(result.content)).toBeUndefined()
-    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
+    expect((await presentation(ctx, agent)).names).not.toContain('write')
   })
 
   it('does not request approval when a core monotonic guard already denies execution', async () => {
@@ -448,10 +440,10 @@ describe('real approval and final policy boundary', () => {
     }))
     cleanups.push(ctx.tools.guard(exec => exec.name === 'activate_tools' ? 'Existing core guard denies activation' : undefined))
     const { agent } = await makeAgent('core-guard')
-    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' })
     expect(result.isError).toBe(true)
     expect(asks).toBe(0)
-    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
+    expect((await presentation(ctx, agent)).names).not.toContain('write')
   })
 
   it('does not mint a receipt for a core post-execute rejection', async () => {
@@ -460,10 +452,10 @@ describe('real approval and final policy boundary', () => {
       ? { kind: 'block', feedback: [{ type: 'text', text: 'Core policy rejects activation' }] }
       : next()))
     const { agent } = await makeAgent('post-block')
-    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' })
     expect(result.isError).toBe(true)
     expect(receiptFromContent(result.content)).toBeUndefined()
-    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
+    expect((await presentation(ctx, agent)).names).not.toContain('write')
   })
 
   it('does not commit a successful body if the caller is cancelled during post-execute', async () => {
@@ -476,10 +468,10 @@ describe('real approval and final policy boundary', () => {
       return decision
     }))
     const { agent } = await makeAgent('post-cancel')
-    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'post-cancel-call', controller.signal)
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' }, 'post-cancel-call', controller.signal)
     expect(result.isError).toBe(true)
     expect(receiptFromContent(result.content)).toBeUndefined()
-    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
+    expect((await presentation(ctx, agent)).names).not.toContain('write')
   })
 
   it('rechecks configuration after an asynchronous approval rather than using a stale snapshot', async () => {
@@ -491,14 +483,14 @@ describe('real approval and final policy boundary', () => {
       return answer.promise
     }))
     const { agent } = await makeAgent('approval-config-race')
-    const pending = call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    const pending = call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' })
     await entered.promise
     setPolicy({ mode: 'manual' })
     answer.resolve('allowed-once')
     const result = await pending
     expect(result.isError).toBe(true)
     expect(receiptFromContent(result.content)).toBeUndefined()
-    expect((await presentation(ctx, agent)).names).toEqual(['glob', 'grep', 'read', 'write'])
+    expect((await presentation(ctx, agent)).names).toEqual(['glob', 'grep', 'read'])
   })
 })
 
@@ -510,24 +502,23 @@ describe('real PTC bridge and SDK presentation', () => {
     const before = await presentation(ctx, agent)
     expect(before.names).toEqual(['run_code'])
     expect(before.text).toContain('activate_tools')
-    expect(before.text).toContain('WRITE FULL GUIDE')
-    expect(before.text).not.toContain(DISCOVERABLE_GUIDE)
-    expect(before.text).not.toMatch(new RegExp(language === 'typescript' ? `\\n {2}${DISCOVERABLE_TOOL}: ` : `\\n {4}async def ${DISCOVERABLE_TOOL}\\(`, 'u'))
-    const activated = await call(ctx, agent, 'run_code', { code: 'activate', description: 'Activate the shell tool' })
+    expect(before.text).not.toContain('WRITE FULL GUIDE')
+    expect(before.text).not.toMatch(language === 'typescript' ? /\n {2}write: /u : /async def write\(/u)
+    const activated = await call(ctx, agent, 'run_code', { code: 'activate', description: 'Activate the file tools' })
     expect(activated.isError).toBe(false)
     const after = await presentation(ctx, agent)
     expect(after.names).toEqual(['run_code'])
-    expect(after.text).toMatch(new RegExp(language === 'typescript' ? `\\n {2}${DISCOVERABLE_TOOL}: ` : `\\n {4}async def ${DISCOVERABLE_TOOL}\\(`, 'u'))
-    expect(after.text).toContain(DISCOVERABLE_GUIDE)
+    expect(after.text).toMatch(language === 'typescript' ? /\n {2}write: /u : /async def write\(/u)
+    expect(after.text).toContain('WRITE FULL GUIDE')
     expect(after.text).toContain('run_code')
-    const direct = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'illegal-native-ptc')
+    const direct = await call(ctx, agent, 'activate_tools', { identifiers: ['write'], reason: 'Write' }, 'illegal-native-ptc')
     expect(direct.isError).toBe(true)
   })
 
   it('protects its own durable receipt from a spill listener registered before the plugin', async () => {
     const { ctx, makeAgent } = await fixture({ mode: 'ptc', spill: true })
     const { agent, events } = await makeAgent('spill-order')
-    const result = await call(ctx, agent, 'run_code', { code: 'activate', description: 'Activate the shell tool' })
+    const result = await call(ctx, agent, 'run_code', { code: 'activate', description: 'Activate write' })
     expect(result.isError, JSON.stringify(result)).toBe(false)
     const dispatch = events.find(event => event.type === 'tool/ptc-dispatch')
     expect(dispatch?.type).toBe('tool/ptc-dispatch')
@@ -535,14 +526,14 @@ describe('real PTC bridge and SDK presentation', () => {
       throw new Error('The real PTC bridge failed to log its dispatch')
     expect(receiptFromContent(dispatch.data.content)).toMatchObject({
       authorized: true,
-      commit: { callId: 'fixture-call:ptc:1', activatedToolIds: [DISCOVERABLE_TOOL] },
-      state: { activatedTools: [{ identifier: DISCOVERABLE_TOOL, name: DISCOVERABLE_TOOL, apiCount: 1 }] },
+      commit: { callId: 'fixture-call:ptc:1', activatedToolIds: ['write'] },
+      state: { activatedTools: [{ identifier: 'write', name: 'write', apiCount: 1 }] },
     })
     expect(dispatch.data.content).not.toEqual([{ type: 'text', text: 'Spilled to a result locator' }])
-    expect((await presentation(ctx, agent)).text).toContain(DISCOVERABLE_GUIDE)
+    expect((await presentation(ctx, agent)).text).toContain('WRITE FULL GUIDE')
     closeTurn(agent.session)
     const restored = await makeAgent('spill-restored', JSON.parse(JSON.stringify(events)))
-    expect((await presentation(ctx, restored.agent)).text).toContain(DISCOVERABLE_GUIDE)
+    expect((await presentation(ctx, restored.agent)).text).toContain('WRITE FULL GUIDE')
   })
 
   it('does not retain a PTC sub-activation if the outer program fails after that sub-call succeeds', async () => {
@@ -551,7 +542,7 @@ describe('real PTC bridge and SDK presentation', () => {
     const result = await call(ctx, agent, 'run_code', { code: 'activate then fail', description: 'Test an outer failure' })
     expect(result.isError).toBe(true)
     expect(events.some(event => event.type === 'tool/ptc-dispatch' && !event.data.isError && receiptFromContent(event.data.content))).toBe(true)
-    expect((await presentation(ctx, agent)).text).not.toContain(DISCOVERABLE_GUIDE)
+    expect((await presentation(ctx, agent)).text).not.toContain('WRITE FULL GUIDE')
     expect(ctx.sessionProjections.stateOf(agent.session, 'tool-activator:activation')?.activatedToolIds).toEqual([])
   })
 
@@ -566,7 +557,7 @@ describe('real PTC bridge and SDK presentation', () => {
     const result = await call(ctx, agent, 'run_code', { code: 'activate', description: 'Activate after approval' })
     expect(result.isError, JSON.stringify(result)).toBe(false)
     expect(asks).toEqual(['fixture-call:ptc:1'])
-    expect((await presentation(ctx, agent)).text).toContain(DISCOVERABLE_GUIDE)
+    expect((await presentation(ctx, agent)).text).toContain('WRITE FULL GUIDE')
   })
 
   it('disabled mode presents the original PTC SDK without the activator', async () => {

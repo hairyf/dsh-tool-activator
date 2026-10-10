@@ -16,7 +16,7 @@
 
 ## 核心行为
 
-默认基础工具为 `read`、`glob`、`grep`、`write`、`edit`、`skill`、`ask_user_question`、`todo_write`。
+默认基础工具为 `read`、`glob`、`grep`、`skill`、`ask_user_question`、`todo_write`。
 
 | 运行状态 | 模型可见内容 |
 | --- | --- |
@@ -26,7 +26,7 @@
 
 ### 默认启用的工具
 
-`read`、`glob`、`grep`、`write`、`edit`、`skill`、`ask_user_question`、`todo_write`
+`read`、`glob`、`grep`、`skill`、`ask_user_question`、`todo_write`
 
 ### 可通过 `activate_tools` 加载的工具
 
@@ -74,7 +74,7 @@
 
 | 分区 | 含义 |
 | --- | --- |
-| **默认激活工具（N 个）** | 每次请求都带完整 schema 的工具；插件自带的八个基础工具固定在此区，标题右侧带"基础工具"标记，开关为禁用，不允许关闭 |
+| **默认激活工具（N 个）** | 每次请求都带完整 schema 的工具；插件自带的六个基础工具固定在此区，标题右侧带"基础工具"标记，开关为禁用，不允许关闭 |
 | **已安装但需先激活（M 个）** | 其余工具，模型用 `activate_tools` 按需获取 |
 
 打开某一项的开关即把它写进 `basicTools`（默认加载），关闭则移回按需区；工具清单与描述由宿主 Remote `toolActivator/catalog` 提供，覆盖当前所有 live agent 作用域。

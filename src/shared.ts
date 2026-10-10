@@ -22,7 +22,7 @@ export interface ToolPolicy {
  * the default set but never shrink it: these stay visible with full schemas
  * even when the profile pins an older `basicTools` list.
  */
-export const BASE_TOOLS: readonly string[] = ['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write']
+export const BASE_TOOLS: readonly string[] = ['read', 'glob', 'grep', 'skill', 'ask_user_question', 'todo_write']
 
 export const DEFAULT_POLICY: ToolPolicy = {
   enabled: true,
