@@ -66,20 +66,20 @@
 
 ---
 
-## 插件配置项
+## 配置
 
-在官方插件管理页的 `dsh-tool-activator#tool-activator` 中可配置：
+进入官方插件管理页，打开 `dsh-tool-activator` 卡片，配置表单直接显示在该插件的页面上（公开 **`plugins.bundle.config`** 槽，key 为包名 `dsh-tool-activator`），不需要再点进某一行的"配置"。
 
-| 配置项 | 默认值 | 说明 |
-| --- | --- | --- |
-| `enabled` | `true` | 是否启用按需展示 |
-| `mode` | `automatic` | 运行模式 (`automatic` / `manual`) |
-| `basicTools` | 六个基础工具 | 默认直接展示的工具列表 |
-| `excludedTools` | `[]` | 不参与发现与激活的工具；**不是执行 deny list** |
-| `requireApproval` | `true` | 激活请求是否需经审批服务（仅 `allowed-once` 有效） |
-| `autoGroupMcp` | `true` | 按 server 聚合 `mcp__server__tool` 名称 |
-| `groups` | `[]` | 显式工具分组及说明 |
-| `sectionTools` | `{}` | 系统说明节到工具名的依赖映射 |
+表单只有一份工具列表：
+
+| 分区 | 含义 |
+| --- | --- |
+| **默认激活工具（N 个）** | 每次请求都带完整 schema 的工具；插件自带的六个基础工具固定在此区，开关为禁用，不允许关闭 |
+| **已安装但需先激活（M 个）** | 其余工具，模型用 `activate_tools` 按需获取 |
+
+打开某一项的开关即把它写进 `basicTools`（默认加载），关闭则移回按需区；工具清单与描述由宿主 Remote `toolActivator/catalog` 提供，覆盖当前所有 live agent 作用域。
+
+其余宿主字段（`mode`、`excludedTools`、`autoGroupMcp`、`groups`、`sectionTools`）仍保留在 schema 中并沿用默认值，但不再出现在表单里。
 
 ---
 
