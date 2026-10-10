@@ -22,6 +22,6 @@ export const CLASSES = {
   rowText: 'dsh-tool-activator-row-text',
   rowName: 'dsh-tool-activator-row-name',
   rowMeta: 'dsh-tool-activator-row-meta',
-  rowState: 'dsh-tool-activator-row-state',
+  actions: 'dsh-tool-activator-actions',
   help: 'dsh-tool-activator-help',
 } as const

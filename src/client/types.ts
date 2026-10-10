@@ -20,6 +20,8 @@ export interface ConfigurationScope {
   getSnapshot: () => ConfigurationScopeSnapshot
   mutate: (ops: readonly ConfigurationOp[], expectedRevision?: number) => Promise<boolean>
   subscribe: (listener: () => void) => () => void
+  /** Clear one field so it falls back to the plugin's own default. */
+  unset?: (field: string) => Promise<boolean>
 }
 
 export interface ToolActivatorConfigurationProps extends PluginConfigViewProps {

@@ -20,7 +20,7 @@ export interface ToolPolicy {
 export const DEFAULT_POLICY: ToolPolicy = {
   enabled: true,
   mode: 'automatic',
-  basicTools: ['read', 'glob', 'grep', 'skill', 'ask_user_question', 'todo_write'],
+  basicTools: ['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write'],
   excludedTools: [],
   requireApproval: true,
   autoGroupMcp: true,
