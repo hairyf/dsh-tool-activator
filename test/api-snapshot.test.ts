@@ -13,9 +13,9 @@ describe('source distribution contracts', () => {
     expect(host.Config({}).get().basicTools).toEqual(['read', 'glob', 'grep', 'skill', 'ask_user_question', 'todo_write'])
   })
 
-  it('exports only the official client lifecycle and service dependency', () => {
+  it('exports only the official client lifecycle and service dependencies', () => {
     expect(Object.keys(client).sort()).toEqual(['apply', 'inject'])
-    expect(client.inject).toEqual(['slots'])
+    expect(client.inject).toEqual(['slots', 'connection'])
   })
 
   it('declares the requested repository, minimum core, icon, and client owners', async () => {

@@ -8,7 +8,7 @@ import { ToolActivatorConfiguration } from './configuration-page'
 import { CONFIGURATION_ENTRY_ID, CONFIGURATION_KEY, CONFIGURATION_REGISTRANT, CONFIGURATION_SLOT } from './constants'
 import { mountToolActivatorStyles } from './styles'
 
-export const inject = ['slots']
+export const inject = ['slots', 'connection']
 
 /**
  * The configuration lives on this bundle's own page in the Plugins manager, so
@@ -16,9 +16,9 @@ export const inject = ['slots']
  */
 export function apply(ctx: Context): void {
   ctx.effect(mountToolActivatorStyles)
+  const loadCatalog = (): Promise<ActivationCatalog> => loadToolCatalog(ctx)
   ctx.inject(['configForms'], (branch) => {
     const configScope = branch.configForms.get(CONFIGURATION_ENTRY_ID) as unknown as ConfigurationScope
-    const loadCatalog = (): Promise<ActivationCatalog> => loadToolCatalog(branch)
     branch.slots.inject(CONFIGURATION_SLOT, () => branch.slots.register({
       name: CONFIGURATION_SLOT,
       key: CONFIGURATION_KEY,

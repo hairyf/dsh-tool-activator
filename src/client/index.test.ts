@@ -73,6 +73,16 @@ async function provideConfigForms(ctx: Context): Promise<() => Promise<void>> {
   return () => fiber.dispose()
 }
 
+async function provideConnection(ctx: Context): Promise<() => Promise<void>> {
+  const fiber = await ctx.plugin({
+    name: 'test-connection',
+    apply(owner: Context): void {
+      owner.provide('connection', { rpc: { call: async () => ({ ok: true, value: { enabled: true, basicTools: [], entries: [] } }) } })
+    },
+  })
+  return () => fiber.dispose()
+}
+
 function declareConfigurationSlot(ctx: Context): () => void {
   return ctx.slots.register({
     name: 'root',
@@ -86,6 +96,7 @@ async function fixture(): Promise<Context> {
   const ctx = new Context()
   const rendererFiber = await ctx.plugin(SlotRegistry)
   disposers.push(() => rendererFiber.dispose())
+  disposers.push(await provideConnection(ctx))
   disposers.push(await provideConfigForms(ctx))
   return ctx
 }

@@ -10,7 +10,7 @@ interface RemoteEnvelope {
 
 interface ConnectionLike {
   rpc?: {
-    call?: (path: string, method: string, payload: { args: unknown[] }) => Promise<RemoteEnvelope>
+    call?: (path: string, method: string, payload: { args: Record<string, unknown> }) => Promise<RemoteEnvelope>
   }
 }
 
@@ -24,7 +24,9 @@ export async function loadToolCatalog(ctx: Context): Promise<ActivationCatalog> 
   const call = rpcOf(ctx)
   if (!call)
     throw new Error('连接服务不可用，无法读取工具列表。')
-  const answer = await call('/api', `${TOOL_ACTIVATOR_REMOTE}/catalog`, { args: [] })
+  // A hand-written Remote reads its parameters by name, so the payload carries
+  // exactly one plain-object `args` field — an empty one for a no-argument method.
+  const answer = await call('/api', `${TOOL_ACTIVATOR_REMOTE}/catalog`, { args: {} })
   if (answer?.ok !== true)
     throw new Error(answer?.error?.message ?? '读取工具列表失败。')
   const catalog = answer.value as ActivationCatalog | undefined
