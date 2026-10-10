@@ -114,7 +114,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
             <li className={CLASSES.row} key={entry.identifier}>
               <span className={CLASSES.rowText}>
                 <span className={CLASSES.rowName}>{entry.name}</span>
-                <span className={CLASSES.rowMeta}>{entry.description || entry.tools.join('、')}</span>
+                <span className={CLASSES.rowMeta} title={entry.description || entry.tools.join('、')}>{entry.description || entry.tools.join('、')}</span>
               </span>
               {locked ? <span className={CLASSES.rowState}>基础工具</span> : null}
               <ToolActivatorSwitch
