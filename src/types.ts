@@ -115,5 +115,6 @@ export interface ActivationCatalogEntry {
 export interface ActivationCatalog {
   enabled: boolean
   basicTools: string[]
+  baseTools: string[]
   entries: ActivationCatalogEntry[]
 }

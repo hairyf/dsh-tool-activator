@@ -12,9 +12,10 @@ afterEach(() => {
 const CATALOG: ActivationCatalog = {
   enabled: true,
   basicTools: ['read'],
+  baseTools: ['read'],
   entries: [
-    { identifier: 'mcp.mail', name: 'mail', description: 'mailbox', tools: ['mcp__mail__send', 'mcp__mail__list'] },
-    { identifier: 'read', name: 'read', description: 'read: Read a file', tools: ['read'] },
+    { identifier: 'mcp.mail', name: 'mail', description: 'mailbox group', tools: ['mcp__mail__send', 'mcp__mail__list'] },
+    { identifier: 'read', name: 'read', description: 'Read a file from disk', tools: ['read'] },
   ],
 }
 
@@ -39,6 +40,26 @@ function renderPage(scope: ConfigurationScope, load: () => Promise<ActivationCat
 }
 
 describe('tool configuration page', () => {
+  it('shows each tool description instead of repeating its name', async () => {
+    renderPage(scopeOf({ basicTools: ['read'] }))
+
+    expect(await screen.findByText('Read a file from disk')).toBeTruthy()
+    expect(screen.getByText('mailbox group')).toBeTruthy()
+  })
+
+  it('locks the plugin base tools so they cannot be disabled', async () => {
+    const scope = scopeOf({ basicTools: ['read'] })
+    renderPage(scope)
+
+    const read = await screen.findByRole('switch', { name: '默认加载 read' })
+    expect(read).toHaveProperty('disabled', true)
+    expect(screen.getByText('基础工具')).toBeTruthy()
+
+    read.click()
+    expect(scope.mutate).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('splits the catalog into default-activated and pending sections with counts', async () => {
     renderPage(scopeOf({ basicTools: ['read'] }))
 
@@ -71,7 +92,7 @@ describe('tool configuration page', () => {
     const read = screen.getByRole('switch', { name: '默认加载 read' })
     expect(mail.getAttribute('aria-checked')).toBe('false')
     expect(read.getAttribute('aria-checked')).toBe('true')
-    expect(screen.getByText('mcp__mail__send、mcp__mail__list')).toBeTruthy()
+    expect(screen.getByText('mailbox group')).toBeTruthy()
   })
 
   it('adds every tool of a group to basicTools when its switch is enabled', async () => {
@@ -104,8 +125,8 @@ describe('tool configuration page', () => {
     const scope = scopeOf({ basicTools: [] }, { writable: false })
     renderPage(scope)
 
-    const read = await screen.findByRole('switch', { name: '默认加载 read' })
-    read.click()
+    const mail = await screen.findByRole('switch', { name: '默认加载 mail' })
+    mail.click()
 
     expect((await screen.findByRole('alert')).textContent).toBe('当前配置不可写，无法保存。')
     expect(scope.mutate).not.toHaveBeenCalled()

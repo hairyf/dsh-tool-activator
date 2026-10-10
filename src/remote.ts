@@ -5,6 +5,7 @@ import type { ToolPolicy } from './shared'
 import type { ActivationCatalog } from './types'
 import { buildToolCatalog } from './catalog'
 import { SETTINGS_REMOTE_NAMESPACE } from './constants'
+import { DEFAULT_POLICY } from './shared'
 
 const REMOTE_METHODS = '@deepseek-ai/dsh-typert-protocol/remote-methods'
 
@@ -42,10 +43,11 @@ export class ToolActivatorRemote {
     return {
       enabled: policy.enabled,
       basicTools: [...policy.basicTools],
+      baseTools: [...DEFAULT_POLICY.basicTools],
       entries: buildToolCatalog(this.schemas(), policy).map(entry => ({
         identifier: entry.identifier,
         name: entry.name,
-        description: entry.description,
+        description: entry.tools.length === 1 ? entry.tools[0]!.description : entry.description,
         tools: entry.tools.map(tool => tool.name),
       })),
     }

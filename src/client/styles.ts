@@ -23,6 +23,7 @@ const CSS = `
 .${CLASSES.rowText}{display:grid;gap:2px;min-width:0;flex:1 1 auto}
 .${CLASSES.rowName}{font-weight:500;overflow-wrap:anywhere}
 .${CLASSES.rowMeta}{color:var(--dsw-alias-label-caption,inherit);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.${CLASSES.rowState}{flex:0 0 auto;color:var(--dsw-alias-label-caption,inherit);font-size:12px;white-space:nowrap}
 .dsh-tool-activator-switch{box-sizing:border-box;position:relative;flex:0 0 auto;width:36px;height:20px;padding:2px;border:0;border-radius:10px;background:var(--dsw-alias-border-l3,rgba(127,127,127,.4));cursor:pointer}
 .dsh-tool-activator-switch[aria-checked=true]{background:var(--dsw-alias-brand-primary,#4d6bfe)}
 .dsh-tool-activator-switch:disabled{cursor:default;opacity:.5}

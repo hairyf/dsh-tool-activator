@@ -105,22 +105,27 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     return <p className={CLASSES.description}>默认只提供基础工具，其余工具由模型按需加载。</p>
 
   function renderRows(entries: readonly ActivationCatalogEntry[]): ReactElement {
+    const baseTools = catalog?.baseTools ?? []
     return (
       <ul className={CLASSES.list}>
-        {entries.map(entry => (
-          <li className={CLASSES.row} key={entry.identifier}>
-            <span className={CLASSES.rowText}>
-              <span className={CLASSES.rowName}>{entry.name}</span>
-              <span className={CLASSES.rowMeta}>{entry.tools.join('、')}</span>
-            </span>
-            <ToolActivatorSwitch
-              checked={isDefaultLoaded(entry, basicTools)}
-              disabled={busy}
-              label={`默认加载 ${entry.name}`}
-              onChange={next => void toggle(entry, next)}
-            />
-          </li>
-        ))}
+        {entries.map((entry) => {
+          const locked = baseTools.length > 0 && entry.tools.length > 0 && entry.tools.every(tool => baseTools.includes(tool))
+          return (
+            <li className={CLASSES.row} key={entry.identifier}>
+              <span className={CLASSES.rowText}>
+                <span className={CLASSES.rowName}>{entry.name}</span>
+                <span className={CLASSES.rowMeta}>{entry.description || entry.tools.join('、')}</span>
+              </span>
+              {locked ? <span className={CLASSES.rowState}>基础工具</span> : null}
+              <ToolActivatorSwitch
+                checked={isDefaultLoaded(entry, basicTools)}
+                disabled={busy || locked}
+                label={`默认加载 ${entry.name}`}
+                onChange={next => void toggle(entry, next)}
+              />
+            </li>
+          )
+        })}
       </ul>
     )
   }
