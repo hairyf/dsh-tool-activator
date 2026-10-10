@@ -40,18 +40,6 @@ function renderPage(scope: ConfigurationScope, load: () => Promise<ActivationCat
 }
 
 describe('tool configuration page', () => {
-  it('writes the plugin default set back when reset is pressed', async () => {
-    const scope = scopeOf({ basicTools: ['mcp__mail__send', 'mcp__mail__list'] })
-    renderPage(scope)
-
-    const button = await screen.findByRole('button', { name: /恢复默认/ })
-    button.click()
-
-    await waitFor(() => expect(scope.mutate).toHaveBeenCalledTimes(1))
-    expect(scope.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['basicTools'], value: ['read'] }], 3)
-    expect(await screen.findByText('默认激活工具（1 个）')).toBeTruthy()
-  })
-
   it('shows each tool description instead of repeating its name', async () => {
     renderPage(scopeOf({ basicTools: ['read'] }))
 

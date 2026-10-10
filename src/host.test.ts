@@ -130,7 +130,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     },
   })
   services.push(fiber)
-  for (const name of ['read', 'write', 'glob', 'grep', DISCOVERABLE_TOOL]) {
+  for (const name of ['read', 'write', 'glob', 'grep', DISCOVERABLE_TOOL, 'web_search']) {
     cleanups.push(ctx.tools.register(defineTool({
       name,
       description: `${name} description`,
@@ -142,6 +142,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   for (const name of ['read', 'write'])
     cleanups.push(ctx.systemPrompt.section({ name: `tool:${name}`, order: 100, text: `${name.toUpperCase()} FULL GUIDE` }))
   cleanups.push(ctx.systemPrompt.section({ name: `tool:${DISCOVERABLE_TOOL}`, order: 100, text: DISCOVERABLE_GUIDE }))
+  cleanups.push(ctx.systemPrompt.section({ name: 'tool:web_search', order: 100, text: 'WEB SEARCH FULL GUIDE' }))
   cleanups.push(ctx.systemPrompt.section({ name: 'host:safety', order: 1, text: 'HOST SAFETY NEVER REMOVED' }))
   cleanups.push(ctx.systemPrompt.context({ name: 'host:runtime', order: 1, text: 'HOST RUNTIME NEVER REMOVED' }))
   let turn = 0
@@ -274,7 +275,8 @@ describe('real rc.2 host contracts', () => {
     expect(enabled.names).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
     expect(enabled.text).toContain(DISCOVERABLE_GUIDE)
     expect(enabled.text.match(/WRITE FULL GUIDE/gu)).toHaveLength(1)
-    expect(enabled.text).not.toContain('<available_tools description=')
+    expect(enabled.text).toContain('<available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">\n  <tool identifier="web_search" name="web_search">web_search: web_search description</tool>\n</available_tools>')
+    expect(enabled.text).not.toContain(`<tool identifier="${DISCOVERABLE_TOOL}" name="${DISCOVERABLE_TOOL}">`)
     const again = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL, 'missing'], reason: 'Check the tools' }, 'already-active')
     expect(receiptFromContent(again.content)?.state).toEqual({ activatedTools: [], activatedSkills: [], alreadyActive: [DISCOVERABLE_TOOL], notFound: ['missing'] })
   })
@@ -325,17 +327,18 @@ describe('real rc.2 host contracts', () => {
     const { ctx, makeAgent } = await fixture({ policy: {
       basicTools: ['read'],
       excludedTools: ['grep'],
-      groups: [{ identifier: 'files', name: 'Files', description: 'File utilities', tools: ['write', 'glob', 'grep'], sections: ['plugin:files'] }],
-      sectionTools: { 'plugin:files': ['write', 'glob', 'grep'] },
+      groups: [{ identifier: 'files', name: 'Files', description: 'File utilities', tools: ['pwsh', 'web_search', 'grep'], sections: ['plugin:files'] }],
+      sectionTools: { 'plugin:files': ['pwsh', 'web_search', 'grep'] },
     } })
     cleanups.push(ctx.systemPrompt.section({ name: 'plugin:files', order: 110, text: 'SHARED HIDDEN GUIDE' }))
     const { agent } = await makeAgent('grouped')
     const result = await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use file utilities' })
     expect(receiptFromContent(result.content)?.state.activatedTools).toEqual([{ identifier: 'files', name: 'Files', apiCount: 2 }])
     const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'glob', 'read', 'write'])
+    expect(enabled.names).toEqual(['activate_tools', 'glob', 'pwsh', 'read', 'web_search', 'write'])
     expect(enabled.text).not.toContain('SHARED HIDDEN GUIDE')
     expect(enabled.text).toContain('WRITE FULL GUIDE')
+    expect(enabled.text).toContain('WEB SEARCH FULL GUIDE')
   })
 
   it('manual mode hides the activator, ignores restored activations, and disables explicit calls', async () => {
@@ -355,7 +358,7 @@ describe('real rc.2 host contracts', () => {
     const { agent } = await makeAgent('disabled')
     setPolicy({ enabled: false })
     const disabled = await presentation(ctx, agent)
-    expect(disabled.names).toEqual(['glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
+    expect(disabled.names).toEqual(['glob', 'grep', DISCOVERABLE_TOOL, 'read', 'web_search', 'write'])
     expect(disabled.text).toContain('WRITE FULL GUIDE')
     expect(disabled.text).not.toContain('# Tools Activator')
     expect((await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })).isError).toBe(true)
@@ -365,7 +368,7 @@ describe('real rc.2 host contracts', () => {
     const { ctx, makeAgent } = await fixture()
     const { agent } = await makeAgent('scope-identity')
     await expect(ctx.systemPrompt.assemble({ scope: {}, agent })).rejects.toThrow('exact agent scope')
-    expect((await ctx.systemPrompt.assemble()).tools.map(tool => tool.name)).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
+    expect((await ctx.systemPrompt.assemble()).tools.map(tool => tool.name)).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'web_search', 'write'])
     const stale = { ...agent }
     await expect(ctx.systemPrompt.assemble({ scope: stale, agent: stale })).rejects.toThrow('exact live agent')
     expect((await call(ctx, stale, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })).isError).toBe(true)

@@ -9,18 +9,8 @@ export interface SwitchProps {
 }
 
 interface PrimitivesModule {
-  Button?: ComponentType<ButtonProps>
   Switch?: ComponentType<SwitchProps>
   Tag?: ComponentType<TagProps>
-}
-
-export interface ButtonProps {
-  children?: ReactNode
-  className?: string
-  disabled?: boolean
-  onClick?: () => void
-  size?: 'md' | 'sm'
-  variant?: 'primary' | 'ghost' | 'outline' | 'toolbar'
 }
 
 export interface TagProps {
@@ -29,7 +19,6 @@ export interface TagProps {
   tone?: 'outline' | 'solid' | 'neutral' | 'quiet' | 'success' | 'info' | 'warning' | 'danger'
 }
 
-const BUTTON_CAPABILITY = 'Button'
 const SWITCH_CAPABILITY = 'Switch'
 const TAG_CAPABILITY = 'Tag'
 
@@ -70,15 +59,5 @@ function LocalTag({ children, className }: TagProps): ReactElement {
   return createElement('span', { className: className === undefined ? 'dsh-tool-activator-chip' : `dsh-tool-activator-chip ${className}` }, children)
 }
 
-function LocalButton({ children, disabled, onClick }: ButtonProps): ReactElement {
-  return createElement('button', {
-    className: 'dsh-tool-activator-button',
-    disabled: disabled === true,
-    onClick,
-    type: 'button',
-  }, children)
-}
-
-export const ToolActivatorButton: ComponentType<ButtonProps> = primitive<ButtonProps>(BUTTON_CAPABILITY) ?? LocalButton
 export const ToolActivatorSwitch: ComponentType<SwitchProps> = primitiveSwitch() ?? LocalSwitch
 export const ToolActivatorTag: ComponentType<TagProps> = primitive<TagProps>(TAG_CAPABILITY) ?? LocalTag

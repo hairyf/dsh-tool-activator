@@ -3,7 +3,7 @@ import type { ActivationCatalog, ActivationCatalogEntry } from '../types'
 import type { ConfigurationScope, ToolActivatorConfigurationProps } from './types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CLASSES } from './constants'
-import { ToolActivatorButton, ToolActivatorSwitch, ToolActivatorTag } from './primitives'
+import { ToolActivatorSwitch, ToolActivatorTag } from './primitives'
 
 function readBasicTools(scope: ConfigurationScope): string[] {
   const value = scope.getSnapshot().value
@@ -17,6 +17,11 @@ function hasStoredBasicTools(scope: ConfigurationScope): boolean {
 
 function isDefaultLoaded(entry: ActivationCatalogEntry, basicTools: readonly string[]): boolean {
   return entry.tools.length > 0 && entry.tools.every(tool => basicTools.includes(tool))
+}
+
+/** The plugin's own base tools stay loaded whether or not the document lists them. */
+function isBaseTool(entry: ActivationCatalogEntry, baseTools: readonly string[]): boolean {
+  return baseTools.length > 0 && entry.tools.length > 0 && entry.tools.every(tool => baseTools.includes(tool))
 }
 
 export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog }: ToolActivatorConfigurationProps): ReactElement | null {
@@ -61,10 +66,11 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
 
   const groups = useMemo(() => {
     const entries = catalog?.entries ?? []
+    const baseTools = catalog?.baseTools ?? []
     const active: ActivationCatalogEntry[] = []
     const pending: ActivationCatalogEntry[] = []
     for (const entry of entries)
-      (isDefaultLoaded(entry, basicTools) ? active : pending).push(entry)
+      (isBaseTool(entry, baseTools) || isDefaultLoaded(entry, basicTools) ? active : pending).push(entry)
     return { active, pending }
   }, [basicTools, catalog])
 
@@ -101,43 +107,6 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     }
   }, [basicTools, configScope])
 
-  const reset = useCallback(async (): Promise<void> => {
-    const snapshot = configScope.getSnapshot()
-    const previous = basicTools
-    const defaults = catalog?.baseTools ?? []
-    if (defaults.length === 0) {
-      setFailure('插件没有可恢复的默认工具集。')
-      return
-    }
-    if (snapshot.status !== 'ready' || !snapshot.writable || snapshot.mode !== 'host') {
-      setFailure('当前配置不可写，无法保存。')
-      return
-    }
-    setBasicTools(defaults)
-    setBusy(true)
-    setFailure('')
-    try {
-      // Written explicitly rather than cleared: an outer composition layer may
-      // pin basicTools, and clearing only the user layer would leave that pin in
-      // force and look like the button did nothing.
-      const accepted = await configScope.mutate([{ op: 'set', path: ['basicTools'], value: defaults }], snapshot.revision)
-      if (!accepted && aliveRef.current) {
-        setBasicTools(previous)
-        setFailure('宿主拒绝了本次修改。')
-      }
-    }
-    catch (problem) {
-      if (aliveRef.current) {
-        setBasicTools(previous)
-        setFailure(problem instanceof Error ? problem.message : String(problem))
-      }
-    }
-    finally {
-      if (aliveRef.current)
-        setBusy(false)
-    }
-  }, [basicTools, catalog, configScope])
-
   if (view === 'summary')
     return <p className={CLASSES.description}>默认只提供基础工具，其余工具由模型按需加载。</p>
 
@@ -146,7 +115,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     return (
       <ul className={CLASSES.list}>
         {entries.map((entry) => {
-          const locked = baseTools.length > 0 && entry.tools.length > 0 && entry.tools.every(tool => baseTools.includes(tool))
+          const locked = isBaseTool(entry, baseTools)
           return (
             <li className={CLASSES.row} key={entry.identifier}>
               <span className={CLASSES.rowText}>
@@ -157,7 +126,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                 <span className={CLASSES.rowMeta} title={entry.description || entry.tools.join('、')}>{entry.description || entry.tools.join('、')}</span>
               </span>
               <ToolActivatorSwitch
-                checked={isDefaultLoaded(entry, basicTools)}
+                checked={locked || isDefaultLoaded(entry, basicTools)}
                 disabled={busy || locked}
                 label={`默认加载 ${entry.name}`}
                 onChange={next => void toggle(entry, next)}
@@ -192,17 +161,6 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                   ? <p className={CLASSES.help}>全部工具都已默认激活。</p>
                   : renderRows(groups.pending)}
               </section>
-              <div className={CLASSES.actions}>
-                <ToolActivatorButton
-                  disabled={busy}
-                  onClick={() => void reset()}
-                  size="sm"
-                  variant="outline"
-                >
-                  {`恢复默认（${(catalog.baseTools ?? []).length} 个基础工具）`}
-                </ToolActivatorButton>
-                <span className={CLASSES.help}>清除本机保存的默认集，回到插件自带的清单。</span>
-              </div>
             </>
           )}
     </section>
