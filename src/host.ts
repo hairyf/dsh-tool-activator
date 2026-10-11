@@ -105,8 +105,15 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     const catalog = catalogOf(agent, policy)
     const history = historyOf(agent)
     const enabled = enabledToolNames(catalog, policy, history.activatedToolIds)
-    if (ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool)
+    if (ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool) {
+      // The scope cannot reach the activator — a restriction denied it, another
+      // registration shadows it, or the host never exposed it. Automatic mode
+      // then steps aside: hiding the rest of the tool set would hand the model a
+      // directory it cannot act on.
+      if (policy.mode === 'automatic')
+        return assembly
       enabled.delete(ACTIVATOR_TOOL_NAME)
+    }
     const instructions = enabled.has('skill') && ctx.tools.get('skill', agent)
       ? history.activatedSkills.flatMap(skill => skill.instructions === undefined ? [] : [skill.instructions])
       : []

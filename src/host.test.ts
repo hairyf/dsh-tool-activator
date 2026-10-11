@@ -323,6 +323,22 @@ describe('real rc.2 host contracts', () => {
     expect(direct.isError).toBe(true)
   })
 
+  it('presents the untouched tool set when the activator itself is denied for the scope', async () => {
+    const { ctx, makeAgent } = await fixture()
+    const { agent } = await makeAgent('no-activator')
+    const restriction = await agent.ctx.plugin({
+      inject: ['tools'],
+      apply(owner: Context): void {
+        owner.tools.restrict({ deny: ['activate_tools'] })
+      },
+    })
+    cleanups.push(() => restriction.dispose())
+    const visible = await presentation(ctx, agent)
+    expect(visible.names).not.toContain('activate_tools')
+    expect(visible.names).toContain(DISCOVERABLE_TOOL)
+    expect(visible.text).not.toContain('<available_tools')
+  })
+
   it('activates every authorized API in an explicit group without exposing excluded members or shared docs', async () => {
     const { ctx, makeAgent } = await fixture({ policy: {
       basicTools: ['read'],
