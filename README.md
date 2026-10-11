@@ -9,8 +9,6 @@
 为 DeepSeek Harness (DSH) 减少初始工具上下文：默认仅展示基础工具，其余工具通过 `activate_tools` 按需加载。
 
 * **系统要求**：DSH $\ge$ `0.2.0-rc.2`；Node.js $\ge$ `22.19.0`。
-* **交付状态**：当前为源码交付，未发布 npm 包。
-* **定位声明**：本插件**不是权限系统**，仅影响模型可见的 schema 和提示词，不替代核心审批与沙箱机制。
 
 ---
 
@@ -18,7 +16,7 @@
 
 默认基础工具为 `read`、`glob`、`grep`、`write`、`edit`、`skill`、`ask_user_question`、`todo_write`。
 
-模型每次都看到：基础工具、已激活工具、`activate_tools`，以及其余工具的 `<available_tools>` 简述目录。这套行为没有开关——插件装上就生效；唯一会隐藏的例外是该 agent 作用域看不到 `activate_tools`（被 `tools.restrict` 挡掉等），此时插件不拦截任何工具。
+模型每次都看到：基础工具、已激活工具、`activate_tools`，以及其余工具的 `<available_tools>` 简述目录。
 
 ### 默认启用的工具
 
@@ -42,7 +40,7 @@
 
 此外，任意已安装插件的工具都可作为标识请求；开启 `autoGroupMcp` 时，`mcp__server__tool` 还会按 server 聚合为 `mcp.server`。
 
-实际可用集合以当次 `<available_tools>` 目录为准：未知、已移除或作用域不可见的标识不会因此被注册或授权。该目录随提示词注入给模型，只有标识、名称和一句简述：
+实际可用集合将以 `<available_tools>` 目录呈现，该目录随提示词注入给模型，只有标识、名称和一句简述：
 
 ```xml
 <available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">
@@ -64,21 +62,20 @@
 
 ## 配置
 
-进入官方插件管理页，打开 `dsh-tool-activator` 卡片，配置表单直接显示在该插件的页面上（公开 **`plugins.bundle.config`** 槽，key 为包名 `dsh-tool-activator`），不需要再点进某一行的"配置"。
+进入官方插件管理页，打开 `dsh-tool-activator` 卡片，配置表单直接显示在该插件的页面上。
 
-<img height="800" alt="image" src="https://github.com/user-attachments/assets/55d7b574-5a05-4892-9567-fd9d3310c566" />
+<img width="2075" height="1248" alt="image" src="https://github.com/user-attachments/assets/25214d03-2743-4ba1-8064-675e43de0ea6" />
 
-
-表单只有一份工具列表：
+表单显示工具列表：
 
 | 分区 | 含义 |
 | --- | --- |
-| **默认激活工具（N 个）** | 每次请求都带完整 schema 的工具；插件自带的八个基础工具固定在此区并排在最前，标题右侧带"基础工具"标记，开关为禁用，不允许关闭 |
-| **按需激活（M 个）** | 其余工具，模型用 `activate_tools` 按需获取 |
+| **默认激活** | 每次请求都带完整 schema 的工具；自带八个基础工具固定在此，标题右侧带"基础工具"标记，不被允许关闭 |
+| **按需激活** | 其余工具，模型可使用 `activate_tools` 按需获取 |
 
 打开某一项的开关即把它写进 `basicTools`（默认加载），关闭则移回按需区；工具清单与描述由宿主 Remote `toolActivator/catalog` 提供，覆盖当前所有 live agent 作用域。
 
-**常规**区两个开关：`requireApproval`（非完全权限时激活前请求确认，缺少审批服务时直接拒绝；完全权限 `danger-full-access` 时无需确认，即使审批策略为 `never`）与 `autoGroupMcp`（按 `mcp__server__tool` 前缀聚合同一 MCP 服务），都带 hover 说明。
+**常规**区两个开关：`requireApproval`（非完全权限时激活前请求确认，缺少审批服务时直接拒绝；完全权限 `danger-full-access` 时无需确认，即使审批策略为 `never`）与 `autoGroupMcp`（按 `mcp__server__tool` 前缀聚合同一 MCP 服务）
 
 **工具分组**区是结构化编辑器：每个分组有标识符、名称、说明、工具勾选（只能从当前目录里的真实工具中选）和说明节绑定，支持增删；留空则每个工具各自成为条目。`sectionTools` 仍留在 schema 里（进阶用法：说明节到工具名的依赖映射），但不再出现在表单中。
 
@@ -91,17 +88,6 @@
 * **生命周期**：Cordis 负责注册、监听及 HMR 清理，卸载时自动清理样式与实例。
 
 ---
-
-## 源码验证与交付边界
-
-根目录下可执行以下命令进行验证：
-
-```powershell
-$env:CI = 'true'
-node node_modules/eslint/bin/eslint.js . --fix
-node node_modules/typescript/bin/tsc --noEmit
-node node_modules/vitest/vitest.mjs run
-```
 
 * **测试情况**：2026-10-11 完全权限修复后，12 个文件、304 个用例全部通过；lint、类型检查与 Build 同样通过。
 * **未验证项**：真实 GUI E2E、打包发布及真实 profile 验证。
