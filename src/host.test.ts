@@ -339,6 +339,27 @@ describe('real rc.2 host contracts', () => {
     expect(visible.text).not.toContain('<available_tools')
   })
 
+  it('keeps filtering when the scope registers its own activate_tools', async () => {
+    const { ctx, makeAgent } = await fixture()
+    const { agent } = await makeAgent('shadowed-activator')
+    const shadow = await agent.ctx.plugin({
+      inject: ['tools'],
+      apply(owner: Context): void {
+        owner.tools.register(defineTool({
+          name: 'activate_tools',
+          description: 'scope-local activator',
+          parameters: { path: { type: 'string', required: true } },
+          output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+          execute: async args => `shadow:${args.path}`,
+        }))
+      },
+    })
+    cleanups.push(() => shadow.dispose())
+    const visible = await presentation(ctx, agent)
+    expect(visible.names).toContain('activate_tools')
+    expect(visible.names).not.toContain(DISCOVERABLE_TOOL)
+  })
+
   it('activates every authorized API in an explicit group without exposing excluded members or shared docs', async () => {
     const { ctx, makeAgent } = await fixture({ policy: {
       basicTools: ['read'],
