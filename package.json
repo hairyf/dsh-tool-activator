@@ -1,7 +1,7 @@
 {
   "name": "dsh-tool-activator",
   "type": "module",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "packageManager": "pnpm@11.15.1",
   "description": "Load only basic DeepSeek Harness tools by default and activate other tools on demand.",
   "author": "Hairy <wwu710632@gmail.com>",
