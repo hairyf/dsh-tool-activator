@@ -21,6 +21,7 @@ import { ApprovalService } from '@deepseek-ai/dsh-user-approval'
 import { afterEach, describe, expect, it } from 'vitest'
 import { receiptFromContent } from './activation'
 import { Config } from './config'
+import { ACTIVATION_PROJECTION_KEY } from './constants'
 import * as plugin from './index'
 
 const cleanups: Array<() => unknown> = []
@@ -360,45 +361,31 @@ describe('real rc.2 host contracts', () => {
     expect(visible.names).not.toContain(DISCOVERABLE_TOOL)
   })
 
-  it('activates every authorized API in an explicit group without exposing excluded members or shared docs', async () => {
+  it('activates every authorized API in an explicit group without exposing shared docs', async () => {
     const { ctx, makeAgent } = await fixture({ policy: {
       basicTools: ['read'],
-      excludedTools: ['grep'],
       groups: [{ identifier: 'files', name: 'Files', description: 'File utilities', tools: ['pwsh', 'web_search', 'grep'], sections: ['plugin:files'] }],
-      sectionTools: { 'plugin:files': ['pwsh', 'web_search', 'grep'] },
+      // `not_registered` is never available, so the shared section stays hidden.
+      sectionTools: { 'plugin:files': ['pwsh', 'web_search', 'not_registered'] },
     } })
     cleanups.push(ctx.systemPrompt.section({ name: 'plugin:files', order: 110, text: 'SHARED HIDDEN GUIDE' }))
     const { agent } = await makeAgent('grouped')
     const result = await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use file utilities' })
-    expect(receiptFromContent(result.content)?.state.activatedTools).toEqual([{ identifier: 'files', name: 'Files', apiCount: 2 }])
+    expect(receiptFromContent(result.content)?.state.activatedTools).toEqual([{ identifier: 'files', name: 'Files', apiCount: 3 }])
     const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'glob', 'pwsh', 'read', 'web_search', 'write'])
+    expect(enabled.names).toEqual(['activate_tools', 'glob', 'grep', 'pwsh', 'read', 'web_search', 'write'])
     expect(enabled.text).not.toContain('SHARED HIDDEN GUIDE')
     expect(enabled.text).toContain('WRITE FULL GUIDE')
     expect(enabled.text).toContain('WEB SEARCH FULL GUIDE')
   })
 
-  it('manual mode hides the activator, ignores restored activations, and disables explicit calls', async () => {
+  it('keeps a committed activation when the configuration is unchanged', async () => {
     const { ctx, makeAgent, setPolicy } = await fixture()
-    const { agent } = await makeAgent('manual')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    setPolicy({ mode: 'manual' })
-    const manual = await presentation(ctx, agent)
-    expect(manual.names).toEqual(['glob', 'grep', 'read', 'write'])
-    expect(manual.text).not.toContain(DISCOVERABLE_GUIDE)
-    expect(manual.text).not.toContain('<available_tools')
-    expect((await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'manual-call')).isError).toBe(true)
-  })
-
-  it('disabled mode restores the original presentation but never exposes its own tool', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture()
-    const { agent } = await makeAgent('disabled')
-    setPolicy({ enabled: false })
-    const disabled = await presentation(ctx, agent)
-    expect(disabled.names).toEqual(['glob', 'grep', DISCOVERABLE_TOOL, 'read', 'web_search', 'write'])
-    expect(disabled.text).toContain('WRITE FULL GUIDE')
-    expect(disabled.text).not.toContain('# Tools Activator')
-    expect((await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })).isError).toBe(true)
+    const { agent } = await makeAgent('stable-config')
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    expect(result.isError).toBe(false)
+    setPolicy({ requireApproval: true })
+    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
   })
 
   it('rejects stale or mismatched agent scopes and leaves agentless diagnostic assembly untouched', async () => {
@@ -519,8 +506,8 @@ describe('real approval and final policy boundary', () => {
     expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
   })
 
-  it('rechecks configuration after an asynchronous approval rather than using a stale snapshot', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ policy: { requireApproval: true }, approval: true })
+  it('rechecks the live scope after an asynchronous approval rather than using a stale snapshot', async () => {
+    const { ctx, makeAgent } = await fixture({ policy: { requireApproval: true }, approval: true })
     const entered = deferred<void>()
     const answer = deferred<'allowed-once'>()
     cleanups.push(ctx.on('approval/request', async () => {
@@ -530,12 +517,19 @@ describe('real approval and final policy boundary', () => {
     const { agent } = await makeAgent('approval-config-race')
     const pending = call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
     await entered.promise
-    setPolicy({ mode: 'manual' })
+    const restriction = await agent.ctx.plugin({
+      inject: ['tools'],
+      apply(owner: Context): void {
+        owner.tools.restrict({ deny: ['activate_tools'] })
+      },
+    })
+    cleanups.push(() => restriction.dispose())
     answer.resolve('allowed-once')
     const result = await pending
     expect(result.isError).toBe(true)
     expect(receiptFromContent(result.content)).toBeUndefined()
-    expect((await presentation(ctx, agent)).names).toEqual(['glob', 'grep', 'read', 'write'])
+    const state = ctx.sessionProjections.stateOf(agent.session, ACTIVATION_PROJECTION_KEY) as { activatedToolIds?: string[] } | undefined
+    expect(state?.activatedToolIds ?? []).toEqual([])
   })
 })
 
@@ -606,14 +600,12 @@ describe('real PTC bridge and SDK presentation', () => {
     expect((await presentation(ctx, agent)).text).toContain(DISCOVERABLE_GUIDE)
   })
 
-  it('disabled mode presents the original PTC SDK without the activator', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ mode: 'ptc' })
-    const { agent } = await makeAgent('disabled-ptc')
-    setPolicy({ enabled: false })
-    const disabled = await presentation(ctx, agent)
-    expect(disabled.names).toEqual(['run_code'])
-    expect(disabled.text).toMatch(/\n {2}write: /u)
-    expect(disabled.text).not.toMatch(/\n {2}activate_tools: /u)
+  it('presents the PTC SDK for the transport tool', async () => {
+    const { ctx, makeAgent } = await fixture({ mode: 'ptc' })
+    const { agent } = await makeAgent('ptc-visible')
+    const visible = await presentation(ctx, agent)
+    expect(visible.names).toEqual(['run_code'])
+    expect(visible.text).toMatch(/\n {2}write: /u)
   })
 })
 

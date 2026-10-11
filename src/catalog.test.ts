@@ -5,10 +5,7 @@ import { availableToolsForDiscovery, buildToolCatalog, enabledToolNames, section
 
 function policy(overrides: Partial<ToolPolicy> = {}): ToolPolicy {
   return {
-    enabled: true,
-    mode: 'automatic',
     basicTools: ['read'],
-    excludedTools: [],
     requireApproval: true,
     autoGroupMcp: true,
     groups: [],
@@ -30,7 +27,6 @@ describe('buildToolCatalog', () => {
     const read = tool('read', 'Read the scoped file')
     const search = tool('web_search', 'Search this scope')
     const current = policy({
-      excludedTools: ['write'],
       groups: [
         group('files', ['read', 'write', 'outside_scope'], { name: 'Files', sections: ['tool:files'] }),
         group('absent', ['not_registered']),
@@ -43,9 +39,9 @@ describe('buildToolCatalog', () => {
       {
         identifier: 'files',
         name: 'Files',
-        description: 'read: Read the scoped file',
-        apiDescriptions: [{ name: 'read', description: 'Read the scoped file' }],
-        tools: [read],
+        description: 'read: Read the scoped file\nwrite: write description',
+        apiDescriptions: [{ name: 'read', description: 'Read the scoped file' }, { name: 'write', description: 'write description' }],
+        tools: [read, tool('write')],
         sections: ['tool:files'],
       },
       {
@@ -185,9 +181,8 @@ describe('buildToolCatalog', () => {
 })
 
 describe('enabledToolNames', () => {
-  it('enables basics and activated scoped groups but no unknown or excluded tools', () => {
+  it('enables basics and activated scoped groups but no unknown tools', () => {
     const current = policy({
-      excludedTools: ['write'],
       groups: [group('files', ['read', 'write']), group('web', ['web_search', 'web_fetch'])],
     })
     const catalog = buildToolCatalog([tool('read'), tool('write'), tool('web_fetch'), tool('web_search'), tool('pwsh')], current)
@@ -207,20 +202,6 @@ describe('enabledToolNames', () => {
 
     expect([...enabledToolNames(catalog, current, [])].sort()).toEqual(['activate_tools', 'read', 'run_code'])
     expect([...enabledToolNames(catalog, current, ['editor', 'editor'])].sort()).toEqual(['activate_tools', 'read', 'run_code', 'write'])
-  })
-
-  it('keeps manual mode basic-only despite historical activations', () => {
-    const current = policy({ mode: 'manual', groups: [group('editor', ['read', 'write'])] })
-    const catalog = buildToolCatalog([tool('read'), tool('write'), tool('pwsh')], current)
-
-    expect([...enabledToolNames(catalog, current, ['editor', 'pwsh'])].sort()).toEqual(['read', 'run_code'])
-  })
-
-  it('gives exclusion priority over basic and historical activation settings', () => {
-    const current = policy({ basicTools: ['read', 'write'], excludedTools: ['read', 'write'] })
-    const catalog = buildToolCatalog([tool('read'), tool('write')], current)
-
-    expect([...enabledToolNames(catalog, current, ['read', 'write'])].sort()).toEqual(['activate_tools', 'run_code'])
   })
 })
 

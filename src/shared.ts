@@ -7,10 +7,7 @@ export interface ToolGroup {
 }
 
 export interface ToolPolicy {
-  enabled: boolean
-  mode: 'automatic' | 'manual'
   basicTools: readonly string[]
-  excludedTools: readonly string[]
   requireApproval: boolean
   autoGroupMcp: boolean
   groups: readonly ToolGroup[]
@@ -25,10 +22,7 @@ export interface ToolPolicy {
 export const BASE_TOOLS: readonly string[] = ['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write']
 
 export const DEFAULT_POLICY: ToolPolicy = {
-  enabled: true,
-  mode: 'automatic',
   basicTools: [...BASE_TOOLS],
-  excludedTools: [],
   requireApproval: true,
   autoGroupMcp: true,
   groups: [],

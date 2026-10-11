@@ -7,7 +7,7 @@ import { ACTIVATOR_TOOL_NAME, FIRST_PARTY_SECTION_TOOLS } from './constants'
 export function buildToolCatalog(schemas: readonly ToolSchema[], policy: ToolPolicy): ToolCatalogItem[] {
   validatePolicy(policy)
   const available = new Map(schemas
-    .filter(tool => tool.name !== ACTIVATOR_TOOL_NAME && tool.name !== 'run_code' && !policy.excludedTools.includes(tool.name))
+    .filter(tool => tool.name !== ACTIVATOR_TOOL_NAME && tool.name !== 'run_code')
     .map(tool => [tool.name, tool]))
   const claimed = new Set<string>()
   const entries: ToolCatalogItem[] = []
@@ -67,12 +67,10 @@ export function enabledToolNames(catalog: readonly ToolCatalogItem[], policy: To
   const active = new Set(activatedIds)
   for (const entry of catalog) {
     for (const tool of entry.tools) {
-      if (policy.basicTools.includes(tool.name) || (policy.mode === 'automatic' && active.has(entry.identifier)))
+      if (policy.basicTools.includes(tool.name) || active.has(entry.identifier))
         enabled.add(tool.name)
     }
   }
-  if (policy.mode === 'manual')
-    enabled.delete(ACTIVATOR_TOOL_NAME)
   return enabled
 }
 

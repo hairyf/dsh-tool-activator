@@ -8,10 +8,7 @@ import { activationPrompt, activatorSystemPrompt, availableToolsPrompts, escapeX
 
 function policy(overrides: Partial<ToolPolicy> = {}): ToolPolicy {
   return {
-    enabled: true,
-    mode: 'automatic',
     basicTools: ['read'],
-    excludedTools: [],
     requireApproval: true,
     autoGroupMcp: true,
     groups: [],
@@ -170,17 +167,6 @@ describe('activationPrompt', () => {
     expect(result).not.toContain('files.real_read')
   })
 
-  it('omits discovery and activation advice in manual mode without losing active usage or skill content', () => {
-    const read = tool('read', 'Read a file')
-    const result = activationPrompt({ sections: [], tools: [read], contexts: [], variables: {} }, [entry('read', [read])], policy({ mode: 'manual' }), new Set(['read']), ['SKILL_BODY'])
-
-    expect(result).toContain('read: Read a file')
-    expect(result).toContain('SKILL_BODY')
-    expect(result).not.toContain('<available_tools')
-    expect(result).not.toContain('# Tools Activator')
-    expect(result).not.toContain('call activate_tools')
-  })
-
   it('omits an empty discovery directory once every catalog member is already enabled', () => {
     const read = tool('read', 'Read a file')
     const result = activationPrompt({ sections: [], tools: [read], contexts: [], variables: {} }, [entry('read', [read])], policy(), new Set(['read']))
@@ -232,15 +218,13 @@ describe('filterPromptAssembly', () => {
     expect(rendered(second).split('READ_USAGE_BODY')).toHaveLength(2)
   })
 
-  it('removes activation advice in manual mode and keeps general safety and basic documentation', () => {
+  it('keeps general safety and only the enabled tool documentation', () => {
     const source = assembly()
     const catalog = [entry('read', [source.tools[0]!]), entry('write', [source.tools[1]!])]
-    const result = filterPromptAssembly(source, catalog, policy({ mode: 'manual' }), new Set(['read', 'run_code']), 'SCOPED_SDK_BODY')
+    const result = filterPromptAssembly(source, catalog, policy(), new Set(['read', 'run_code']), 'SCOPED_SDK_BODY')
     const output = rendered(result)
 
     expect(result.tools.map(schema => schema.name)).toEqual(['read', 'run_code'])
-    expect(output).not.toContain('<available_tools')
-    expect(output).not.toContain('# Tools Activator')
     expect(output).not.toContain('WRITE_USAGE_BODY')
     expect(output).toContain('Never reveal secrets. Preserve SAFETY_BODY.')
     expect(output.split('READ_USAGE_BODY')).toHaveLength(2)

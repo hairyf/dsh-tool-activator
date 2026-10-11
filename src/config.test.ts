@@ -8,10 +8,7 @@ function parse(value: unknown): ToolPolicy {
 
 function policy(groups: readonly ToolGroup[]): ToolPolicy {
   return {
-    enabled: true,
-    mode: 'automatic',
     basicTools: ['read'],
-    excludedTools: [],
     requireApproval: true,
     autoGroupMcp: true,
     groups,
@@ -24,14 +21,11 @@ function group(identifier: string, tools: readonly string[]): ToolGroup {
 }
 
 describe('config', () => {
-  it('provides literal automatic-mode defaults through the public volatile config contract', () => {
+  it('provides literal defaults through the public volatile config contract', () => {
     const result = Config({})
 
     expect(result.get()).toEqual({
-      enabled: true,
-      mode: 'automatic',
       basicTools: ['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write'],
-      excludedTools: [],
       requireApproval: true,
       autoGroupMcp: true,
       groups: [],
@@ -40,12 +34,9 @@ describe('config', () => {
     expect(parse(undefined)).toEqual(result.get())
   })
 
-  it('preserves explicit false values, manual mode, and empty basic lists', () => {
-    expect(parse({ enabled: false, mode: 'manual', basicTools: [], requireApproval: false, autoGroupMcp: false })).toEqual({
-      enabled: false,
-      mode: 'manual',
+  it('preserves explicit false values and empty basic lists', () => {
+    expect(parse({ basicTools: [], requireApproval: false, autoGroupMcp: false })).toEqual({
       basicTools: [],
-      excludedTools: [],
       requireApproval: false,
       autoGroupMcp: false,
       groups: [],
@@ -56,14 +47,10 @@ describe('config', () => {
   it('normalizes group metadata without inventing tool schemas or trimming configured scope names', () => {
     expect(parse({
       basicTools: ['read', 'read'],
-      excludedTools: ['write'],
       groups: [{ identifier: 'plugin.files-2', tools: ['mcp__files__read', 'not_in_current_scope'] }],
       sectionTools: { 'plugin:files': ['mcp__files__read'], 'tool:none': [] },
     })).toEqual({
-      enabled: true,
-      mode: 'automatic',
       basicTools: ['read', 'read'],
-      excludedTools: ['write'],
       requireApproval: true,
       autoGroupMcp: true,
       groups: [{ identifier: 'plugin.files-2', name: '', description: '', tools: ['mcp__files__read', 'not_in_current_scope'], sections: [] }],
@@ -77,16 +64,10 @@ describe('config', () => {
     expect(result.groups).toEqual([{ identifier: 'files', name: '文件 & Tools', description: 'Read <files> safely', tools: ['read'], sections: ['plugin:files', 'custom:safety'] }])
   })
 
-  it.each(['invalid', '', 'agent', 'chat'])('rejects unsupported tool mode %j', (mode) => {
-    expect(() => parse({ mode })).toThrow()
-  })
-
   it.each([
-    { enabled: 'true' },
     { requireApproval: 1 },
     { autoGroupMcp: 'false' },
     { basicTools: 'read' },
-    { excludedTools: [42] },
     { groups: 'files' },
     { sectionTools: { 'tool:read': 'read' } },
   ])('rejects invalid configuration field types %j', (input) => {
@@ -100,14 +81,12 @@ describe('config', () => {
     expect(() => parse({ sectionTools: { 'tool:files': [name] } })).toThrow()
   })
 
-  it('keeps basic and excluded defaults independent', () => {
-    const first = parse({ basicTools: ['write'], excludedTools: ['read'] })
+  it('keeps the basic default independent from an explicit list', () => {
+    const first = parse({ basicTools: ['write'] })
     const second = parse({})
 
     expect(first.basicTools).toEqual(['write'])
-    expect(first.excludedTools).toEqual(['read'])
     expect(second.basicTools).toEqual(['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write'])
-    expect(second.excludedTools).toEqual([])
   })
 })
 

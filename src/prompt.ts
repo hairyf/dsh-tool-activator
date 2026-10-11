@@ -42,12 +42,10 @@ export function activationPrompt(assembly: PromptAssembly, catalog: readonly Too
   const dependencies = sectionToolDependencies(catalog, policy)
   const docs = selectedSections.filter(section => Object.hasOwn(dependencies, section.name) || section.name === 'tools:sdk')
   const parts: string[] = []
-  if (policy.mode === 'automatic') {
-    parts.push(activatorSystemPrompt(enabledNames.has('skill')))
-    const discovery = availableToolsPrompts(availableToolsForDiscovery(catalog, enabledNames))
-    if (discovery)
-      parts.push(discovery)
-  }
+  parts.push(activatorSystemPrompt(enabledNames.has('skill')))
+  const discovery = availableToolsPrompts(availableToolsForDiscovery(catalog, enabledNames))
+  if (discovery)
+    parts.push(discovery)
   for (const entry of catalog) {
     const visible = entry.tools.filter(tool => enabledNames.has(tool.name))
     if (visible.length === 0)

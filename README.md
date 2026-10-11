@@ -18,11 +18,7 @@
 
 默认基础工具为 `read`、`glob`、`grep`、`write`、`edit`、`skill`、`ask_user_question`、`todo_write`。
 
-| 运行状态 | 模型可见内容 |
-| --- | --- |
-| `automatic`（默认） | 基础工具、已激活工具、`activate_tools`，以及其余工具的 `<available_tools>` 简述目录 |
-| `manual` | 仅基础工具（无发现目录或 `activate_tools`） |
-| `enabled: false` | 禁用过滤，完全移除激活入口 |
+模型每次都看到：基础工具、已激活工具、`activate_tools`，以及其余工具的 `<available_tools>` 简述目录。这套行为没有开关——插件装上就生效；唯一会隐藏的例外是该 agent 作用域看不到 `activate_tools`（被 `tools.restrict` 挡掉等），此时插件不拦截任何工具。
 
 ### 默认启用的工具
 
@@ -46,7 +42,7 @@
 
 此外，任意已安装插件的工具都可作为标识请求；开启 `autoGroupMcp` 时，`mcp__server__tool` 还会按 server 聚合为 `mcp.server`。
 
-实际可用集合以当次 `<available_tools>` 目录为准：未知、已移除、作用域不可见或被 `excludedTools` 排除的标识不会因此被注册或授权。该目录随提示词注入给模型，只有标识、名称和一句简述：
+实际可用集合以当次 `<available_tools>` 目录为准：未知、已移除或作用域不可见的标识不会因此被注册或授权。该目录随提示词注入给模型，只有标识、名称和一句简述：
 
 ```xml
 <available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">
@@ -82,7 +78,9 @@
 
 打开某一项的开关即把它写进 `basicTools`（默认加载），关闭则移回按需区；工具清单与描述由宿主 Remote `toolActivator/catalog` 提供，覆盖当前所有 live agent 作用域。
 
-其余宿主字段（`mode`、`excludedTools`、`autoGroupMcp`、`groups`、`sectionTools`）仍保留在 schema 中并沿用默认值，但不再出现在表单里。
+**常规**区两个开关：`requireApproval`（激活前请求确认，缺少审批服务时直接拒绝）与 `autoGroupMcp`（按 `mcp__server__tool` 前缀聚合同一 MCP 服务），都带 hover 说明。
+
+**工具分组**区是结构化编辑器：每个分组有标识符、名称、说明、工具勾选（只能从当前目录里的真实工具中选）和说明节绑定，支持增删；留空则每个工具各自成为条目。`sectionTools` 仍留在 schema 里（进阶用法：说明节到工具名的依赖映射），但不再出现在表单中。
 
 ---
 

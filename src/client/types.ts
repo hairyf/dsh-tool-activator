@@ -28,3 +28,20 @@ export interface ToolActivatorConfigurationProps extends PluginConfigViewProps {
   configScope: ConfigurationScope
   loadToolCatalog: () => Promise<ActivationCatalog>
 }
+
+/** One entry of the `groups` configuration, as the settings page edits it. */
+export interface ToolGroupDraft {
+  identifier: string
+  name: string
+  description: string
+  tools: string[]
+  sections: string[]
+}
+
+export interface GroupsEditorProps {
+  disabled?: boolean
+  groups: readonly ToolGroupDraft[]
+  /** Every tool name the catalog knows, so a group can only reference real tools. */
+  toolNames: readonly string[]
+  onChange: (next: ToolGroupDraft[]) => void
+}

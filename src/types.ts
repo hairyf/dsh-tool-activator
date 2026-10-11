@@ -1,4 +1,5 @@
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { ToolGroup } from './shared'
 
 export interface ActivateToolsParams {
   identifiers: string[]
@@ -113,8 +114,10 @@ export interface ActivationCatalogEntry {
 }
 
 export interface ActivationCatalog {
-  enabled: boolean
+  autoGroupMcp: boolean
   basicTools: string[]
   baseTools: string[]
   entries: ActivationCatalogEntry[]
+  groups: ToolGroup[]
+  requireApproval: boolean
 }

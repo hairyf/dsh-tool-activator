@@ -10,13 +10,15 @@ afterEach(() => {
 })
 
 const CATALOG: ActivationCatalog = {
-  enabled: true,
+  autoGroupMcp: true,
   basicTools: ['read'],
   baseTools: ['read'],
   entries: [
     { identifier: 'mcp.mail', name: 'mail', description: 'mailbox group', tools: ['mcp__mail__send', 'mcp__mail__list'] },
     { identifier: 'read', name: 'read', description: 'Read a file from disk', tools: ['read'] },
   ],
+  groups: [],
+  requireApproval: true,
 }
 
 function scopeOf(value: Record<string, unknown>, overrides: Partial<ConfigurationScopeSnapshot> = {}): ConfigurationScope {
@@ -42,7 +44,7 @@ function renderPage(scope: ConfigurationScope, load: () => Promise<ActivationCat
 describe('tool configuration page', () => {
   it('pins the activator in the default section like every other base tool', async () => {
     const custom: ActivationCatalog = {
-      enabled: true,
+      autoGroupMcp: true,
       baseTools: ['activate_tools', 'read'],
       basicTools: ['read'],
       entries: [
@@ -50,6 +52,8 @@ describe('tool configuration page', () => {
         { identifier: 'read', name: 'read', description: 'Read a file', tools: ['read'] },
         { identifier: 'pwsh', name: 'pwsh', description: 'Run the shell', tools: ['pwsh'] },
       ],
+      groups: [],
+      requireApproval: true,
     }
     renderPage(scopeOf({ basicTools: ['read'] }), async () => custom)
 
@@ -62,7 +66,7 @@ describe('tool configuration page', () => {
 
   it('lists the base tools before the tools the user added to the defaults', async () => {
     const custom: ActivationCatalog = {
-      enabled: true,
+      autoGroupMcp: true,
       baseTools: ['read'],
       basicTools: ['read', 'mcp__mail__send', 'mcp__mail__list', 'zeta'],
       entries: [
@@ -70,13 +74,30 @@ describe('tool configuration page', () => {
         { identifier: 'read', name: 'read', description: 'Read a file', tools: ['read'] },
         { identifier: 'mcp.mail', name: 'mail', description: 'mailbox group', tools: ['mcp__mail__send', 'mcp__mail__list'] },
       ],
+      groups: [],
+      requireApproval: true,
     }
     renderPage(scopeOf({ basicTools: custom.basicTools }), async () => custom)
 
     const names = (await screen.findAllByRole('listitem')).map(item => item.textContent)
-    expect(names[0]).toContain('read')
-    expect(names[1]).toContain('mail')
-    expect(names[2]).toContain('zeta')
+    const toolRows = names.filter(name => name?.includes('mail') || name?.includes('zeta') || name?.includes('read'))
+    expect(toolRows[0]).toContain('read')
+    expect(toolRows[1]).toContain('mail')
+    expect(toolRows[2]).toContain('zeta')
+  })
+
+  it('shows the kept behaviour settings and writes them back', async () => {
+    const scope = scopeOf({ basicTools: ['read'] })
+    renderPage(scope)
+
+    const approval = await screen.findByRole('switch', { name: '激活前确认' })
+    const mcp = screen.getByRole('switch', { name: '按 MCP 服务分组' })
+    expect(approval.getAttribute('aria-checked')).toBe('true')
+    expect(mcp.getAttribute('aria-checked')).toBe('true')
+
+    mcp.click()
+    await waitFor(() => expect(scope.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['autoGroupMcp'], value: false }], 3))
+    expect(screen.getAllByTitle(/MCP/).length).toBeGreaterThan(0)
   })
 
   it('shows each tool description instead of repeating its name', async () => {

@@ -87,15 +87,6 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const assembly = await next()
     const policy = policySnapshot()
-    if (!policy.enabled) {
-      return {
-        ...assembly,
-        tools: assembly.tools.filter(schema => schema.name !== ACTIVATOR_TOOL_NAME),
-        sections: assembly.sections.map(section => section.name === 'tools:sdk' && section.text.length > 0 && context.agent
-          ? { ...section, text: renderSdk(context.agent, ctx.tools.schemas(context.agent).filter(schema => schema.name !== ACTIVATOR_TOOL_NAME)), interpolate: false }
-          : section),
-      }
-    }
     if (!context.agent)
       return assembly
     const agent = requireAgent(context.agent)
@@ -107,14 +98,12 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     const enabled = enabledToolNames(catalog, policy, history.activatedToolIds)
     if (ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) === undefined) {
       // Nothing named activate_tools is visible in this scope — a restriction
-      // denied it or the host never exposed it. Automatic mode then steps aside:
-      // hiding the discoverable tools would hand the model a directory it cannot
-      // act on. A scope-local registration of the same name merely shadows ours,
-      // and filtering stays correct there because the model still has something
-      // to call under that name.
-      if (policy.mode === 'automatic')
-        return assembly
-      enabled.delete(ACTIVATOR_TOOL_NAME)
+      // denied it or the host never exposed it. Hiding the discoverable tools
+      // would then hand the model a directory it cannot act on, so present the
+      // untouched assembly instead. A scope-local registration of the same name
+      // merely shadows ours, and filtering stays correct there because the model
+      // still has something to call under that name.
+      return assembly
     }
     const instructions = enabled.has('skill') && ctx.tools.get('skill', agent)
       ? history.activatedSkills.flatMap(skill => skill.instructions === undefined ? [] : [skill.instructions])
@@ -174,7 +163,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     signal.throwIfAborted()
     requireAgent(agent)
     const policy = policySnapshot()
-    if (!policy.enabled || policy.mode !== 'automatic' || (policy.requireApproval && !record.approved) || ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool)
+    if ((policy.requireApproval && !record.approved) || ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool)
       throw new Error('Tool activation is disabled or its configuration changed before the request could commit')
     return policy
   }
@@ -230,7 +219,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     const signal = AbortSignal.any([exec.signal, lifetime.signal])
     signal.throwIfAborted()
     const initialPolicy = policySnapshot()
-    if (!initialPolicy.enabled || initialPolicy.mode !== 'automatic' || ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool)
+    if (ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool)
       throw new Error('Tool activation is disabled by the current plugin configuration or scope')
     const record: ActivationExecution = { agent, identifiers: new Set(args.identifiers), approved: false }
     executions.set(exec.token, record)
@@ -308,7 +297,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
       const issued = executions.get(exec.token)
       const agent = requireAgent(exec.agent)
       const policy = policySnapshot()
-      if (!issued || issued.agent !== agent || exec.signal.aborted || !policy.enabled || policy.mode !== 'automatic'
+      if (!issued || issued.agent !== agent || exec.signal.aborted
         || (policy.requireApproval && !issued.approved) || ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool) {
         return [{ type: 'text', text: 'Tool activation was not committed because the live scope, approval, or configuration changed. Retry after checking the current tool catalog.' }]
       }

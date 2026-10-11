@@ -42,7 +42,7 @@ export class ToolActivatorRemote {
     const policy = this.policy()
     const activator: ToolSchema | undefined = this.schemas().find(schema => schema.name === ACTIVATOR_TOOL_NAME)
     return {
-      enabled: policy.enabled,
+      autoGroupMcp: policy.autoGroupMcp,
       basicTools: [...policy.basicTools],
       // The activator is always loaded, so it belongs in the pinned set the page
       // renders as base tools even though it is not part of the policy list.
@@ -61,6 +61,14 @@ export class ToolActivatorRemote {
           tools: entry.tools.map(tool => tool.name),
         })),
       ],
+      groups: policy.groups.map(group => ({
+        identifier: group.identifier,
+        name: group.name,
+        description: group.description,
+        tools: [...group.tools],
+        sections: [...group.sections],
+      })),
+      requireApproval: policy.requireApproval,
     }
   }
 }

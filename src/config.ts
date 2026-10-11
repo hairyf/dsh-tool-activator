@@ -6,10 +6,7 @@ const identifier = Schema.string().pattern(/^[\w.-]+$/u).required()
 const toolNames = Schema.array(identifier).default([])
 
 export const Config = Schema.object({
-  enabled: Schema.boolean().default(DEFAULT_POLICY.enabled).description('启用按需工具加载'),
-  mode: Schema.union(['automatic', 'manual']).default(DEFAULT_POLICY.mode).description('automatic 按需发现；manual 仅保留基础工具，不允许显式激活'),
   basicTools: toolNames.default([...DEFAULT_POLICY.basicTools]).description('默认加载的真实工具名称'),
-  excludedTools: toolNames.description('不纳入本插件发现与激活的工具；不是执行权限限制'),
   requireApproval: Schema.boolean().default(DEFAULT_POLICY.requireApproval).description('激活前请求用户确认；缺少审批服务时拒绝'),
   autoGroupMcp: Schema.boolean().default(DEFAULT_POLICY.autoGroupMcp).description('按公开 mcp__server__tool 名称聚合同一 MCP 服务'),
   groups: Schema.array(Schema.object({
