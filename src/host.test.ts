@@ -2,7 +2,9 @@ import type { Fiber } from '@deepseek-ai/cordis'
 import type { Agent, Inbox } from '@deepseek-ai/dsh-agent'
 import type { ToolCallId as CallId } from '@deepseek-ai/dsh-llm'
 import type { PtcRunRequest, PtcRunResult, PtcRunSpec } from '@deepseek-ai/dsh-ptc-runtime'
+import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { ApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import type { ToolActivatorConfig } from './config'
 import type { ToolPolicy } from './shared'
 import { tmpdir } from 'node:os'
@@ -11,13 +13,14 @@ import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createAssistantMessage, createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
+import { SandboxPolicyService, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SkillRegistry } from '@deepseek-ai/dsh-skill'
 import { renderContextSnapshot, renderPrompt, SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { defineTool, ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { ApprovalService } from '@deepseek-ai/dsh-user-approval'
+import { ApprovalService, setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { afterEach, describe, expect, it } from 'vitest'
 import { receiptFromContent } from './activation'
 import { Config } from './config'
@@ -59,6 +62,8 @@ interface FixtureOptions {
   policy?: Parameters<typeof Config>[0]
   mode?: 'native' | 'ptc' | 'both'
   approval?: boolean
+  approvalPolicy?: ApprovalPolicy
+  sandboxMode?: SandboxMode
   skills?: boolean
   runtimeContext?: boolean
   spill?: boolean
@@ -106,6 +111,8 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   services.push(await ctx.plugin(SessionStore))
   services.push(await ctx.plugin(AgentRegistry))
   services.push(await ctx.plugin(SessionProjectionRegistry))
+  if (options.sandboxMode)
+    services.push(await ctx.plugin(SandboxPolicyService, { mode: options.sandboxMode, workspaceRoot: FIXTURE_CWD }))
   let ptc: IntegrationPtcRuntime | undefined
   if (options.mode && options.mode !== 'native') {
     services.push(await ctx.plugin((owner: Context) => {
@@ -114,7 +121,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   }
   services.push(await ctx.plugin(ToolRuntime, { mode: options.mode ?? 'native' }))
   if (options.approval)
-    services.push(await ctx.plugin(ApprovalService, { policy: 'ask' }))
+    services.push(await ctx.plugin(ApprovalService, { policy: options.approvalPolicy ?? 'ask' }))
   if (options.skills)
     services.push(await ctx.plugin(SkillRegistry, {}))
   if (options.spill) {
@@ -431,6 +438,72 @@ describe('real rc.2 host contracts', () => {
 })
 
 describe('real approval and final policy boundary', () => {
+  it.each(['native', 'ptc'] as const)('activates under full access with never approval in %s mode and restores the receipt', async (mode) => {
+    const { ctx, makeAgent } = await fixture({ mode, policy: { requireApproval: true }, approval: true, sandboxMode: 'read-only' })
+    const { agent, events } = await makeAgent(`full-access-${mode}`)
+    setSandboxMode(agent.session, 'danger-full-access')
+    setApprovalPolicy(agent.session, 'never')
+    const result = mode === 'native'
+      ? await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell with full access' })
+      : await call(ctx, agent, 'run_code', { code: 'activate', description: 'Activate with full access' })
+    expect(result.isError, JSON.stringify(result)).toBe(false)
+    const dispatch = events.find(event => event.type === 'tool/ptc-dispatch')
+    const content = mode === 'native' ? result.content : dispatch?.type === 'tool/ptc-dispatch' ? dispatch.data.content : []
+    expect(receiptFromContent(content)?.approvalRequired).toBe(false)
+    expect(events.some(event => event.type === 'approval/asked' || event.type === 'approval/decided')).toBe(false)
+    expect((await presentation(ctx, agent)).text).toContain(DISCOVERABLE_GUIDE)
+    closeTurn(agent.session)
+    const restored = await makeAgent(`full-access-restored-${mode}`, JSON.parse(JSON.stringify(events)))
+    expect((await presentation(ctx, restored.agent)).text).toContain(DISCOVERABLE_GUIDE)
+  })
+
+  it.each([false, true])('honors a full-access deployment default with approval service present=%s', async (approval) => {
+    const { ctx, makeAgent } = await fixture({ policy: { requireApproval: true }, approval, approvalPolicy: 'never', sandboxMode: 'danger-full-access' })
+    const { agent, events } = await makeAgent(`full-access-default-${approval}`)
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    expect(result.isError, JSON.stringify(result)).toBe(false)
+    expect(receiptFromContent(result.content)?.approvalRequired).toBe(false)
+    expect(events.some(event => event.type === 'approval/asked')).toBe(false)
+    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
+  })
+
+  it.each(['read-only', 'workspace-write'] as const)('still requires approval for a %s session under a full-access deployment default', async (mode) => {
+    const { ctx, makeAgent } = await fixture({ policy: { requireApproval: true }, approval: true, approvalPolicy: 'never', sandboxMode: 'danger-full-access' })
+    const { agent, events } = await makeAgent(`confined-${mode}`)
+    setSandboxMode(agent.session, mode)
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    expect(result.isError).toBe(true)
+    expect(events.some(event => event.type === 'approval/decided' && event.data.outcome === 'rejected')).toBe(true)
+    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
+  })
+
+  it('does not commit an unapproved activation if full access is revoked during post-execute', async () => {
+    const { ctx, makeAgent } = await fixture({ policy: { requireApproval: true }, approval: true, approvalPolicy: 'never', sandboxMode: 'danger-full-access' })
+    cleanups.push(ctx.on('tools/post-execute', async (exec, _result, next) => {
+      const decision = await next()
+      if (exec.name === 'activate_tools')
+        setSandboxMode(exec.agent!.session, 'read-only')
+      return decision
+    }))
+    const { agent, events } = await makeAgent('full-access-revoked')
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    expect(result.isError).toBe(false)
+    expect(result.content).toEqual([{ type: 'text', text: 'Tool activation was not committed because the live scope, approval, or configuration changed. Retry after checking the current tool catalog.' }])
+    expect(receiptFromContent(result.content)).toBeUndefined()
+    expect(events.some(event => event.type === 'approval/asked')).toBe(false)
+    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
+  })
+
+  it('still honors core execution guards under full access', async () => {
+    const { ctx, makeAgent } = await fixture({ policy: { requireApproval: true }, approval: true, approvalPolicy: 'never', sandboxMode: 'danger-full-access' })
+    cleanups.push(ctx.tools.guard(exec => exec.name === 'activate_tools' ? 'Existing core guard denies activation' : undefined))
+    const { agent } = await makeAgent('full-access-core-guard')
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    expect(result.isError).toBe(true)
+    expect(receiptFromContent(result.content)).toBeUndefined()
+    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
+  })
+
   it('requires a real allowed-once audit pair before committing an approval-required activation', async () => {
     const { ctx, makeAgent } = await fixture({ policy: { requireApproval: true }, approval: true })
     const requests: string[] = []

@@ -1,6 +1,15 @@
 # 源码验证记录
 
-验证日期：2026-10-10，Asia/Shanghai。范围为源码实现，不包含 Build、发布产物、真实 profile 或 GUI E2E。
+## 2026-10-11：完全权限激活修复
+
+- 通过公开 `sandboxPolicy.resolve({ session })` 读取当前会话权限；`danger-full-access` 免去插件的激活确认，执行中校验、最终提交与 receipt 使用相同判断。未挂载 sandbox policy 时仍按插件配置要求审批。
+- 新增 8 个真实宿主集成用例，覆盖 native/PTC + `never`、无审批服务、部署默认与会话覆盖、历史恢复、提交前撤销完全权限、核心 guard 保留；修改前 5 个用例失败，包含原报错 `Tool activation was not approved (rejected)`，修改后全部通过。
+- `pnpm run lint --fix`、`pnpm run typecheck`、`pnpm run test -- --run`、`pnpm run build` 均退出 `0`；全量为 **12 个文件、304 个用例**。
+- Build 输出宿主与客户端产物；仍有既有的 `external` 弃用及客户端 CJS/ESM publint 警告。未安装到真实 profile，未验证 GUI E2E，未打包发布。
+
+## 2026-10-10：历史源码验证
+
+验证日期：2026-10-10，Asia/Shanghai。以下记录范围为源码实现，不包含当时的 Build、发布产物、真实 profile 或 GUI E2E。
 
 ## 基线
 

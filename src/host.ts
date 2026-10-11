@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-ptc-runtime'
+import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type { SkillDefinition, SkillViewOptions } from '@deepseek-ai/dsh-skill'
 import type { ToolExecution, ToolExecutionResult, ToolExecutionToken, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-approval'
@@ -159,11 +160,15 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     return agent
   }
 
+  function requiresApproval(agent: Agent, policy: ToolPolicy): boolean {
+    return policy.requireApproval && ctx.get('sandboxPolicy')?.resolve({ session: agent.session }).mode !== 'danger-full-access'
+  }
+
   function requireExecution(agent: Agent, record: ActivationExecution, signal: AbortSignal): ToolPolicy {
     signal.throwIfAborted()
     requireAgent(agent)
     const policy = policySnapshot()
-    if ((policy.requireApproval && !record.approved) || ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool)
+    if ((requiresApproval(agent, policy) && !record.approved) || ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool)
       throw new Error('Tool activation is disabled or its configuration changed before the request could commit')
     return policy
   }
@@ -223,7 +228,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
       throw new Error('Tool activation is disabled by the current plugin configuration or scope')
     const record: ActivationExecution = { agent, identifiers: new Set(args.identifiers), approved: false }
     executions.set(exec.token, record)
-    if (initialPolicy.requireApproval) {
+    if (requiresApproval(agent, initialPolicy)) {
       const approver = approval
       if (!approver)
         throw new Error('Tool activation requires approval, but the approval service is unavailable')
@@ -298,7 +303,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
       const agent = requireAgent(exec.agent)
       const policy = policySnapshot()
       if (!issued || issued.agent !== agent || exec.signal.aborted
-        || (policy.requireApproval && !issued.approved) || ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool) {
+        || (requiresApproval(agent, policy) && !issued.approved) || ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) !== tool) {
         return [{ type: 'text', text: 'Tool activation was not committed because the live scope, approval, or configuration changed. Retry after checking the current tool catalog.' }]
       }
       const activation = parseActivation(result.value)
@@ -319,7 +324,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
       const receipt: ActivationReceipt = {
         ...accepted,
         authorized: true,
-        approvalRequired: policy.requireApproval,
+        approvalRequired: requiresApproval(agent, policy),
         commit: {
           producer: ACTIVATION_PRODUCER,
           version: ACTIVATION_VERSION,

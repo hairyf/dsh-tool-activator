@@ -7,7 +7,7 @@ const toolNames = Schema.array(identifier).default([])
 
 export const Config = Schema.object({
   basicTools: toolNames.default([...DEFAULT_POLICY.basicTools]).description('默认加载的真实工具名称'),
-  requireApproval: Schema.boolean().default(DEFAULT_POLICY.requireApproval).description('激活前请求用户确认；缺少审批服务时拒绝'),
+  requireApproval: Schema.boolean().default(DEFAULT_POLICY.requireApproval).description('非完全权限时激活前请求用户确认；缺少审批服务时拒绝'),
   autoGroupMcp: Schema.boolean().default(DEFAULT_POLICY.autoGroupMcp).description('按公开 mcp__server__tool 名称聚合同一 MCP 服务'),
   groups: Schema.array(Schema.object({
     identifier,

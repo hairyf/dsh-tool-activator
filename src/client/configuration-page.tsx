@@ -249,7 +249,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                 <ul className={CLASSES.list}>
                   <SettingRow
                     checked={requireApproval}
-                    description="激活工具前先请求你的确认；没有可用的审批服务时直接拒绝激活。"
+                    description="非完全权限时，激活工具前先请求你的确认；没有可用的审批服务时直接拒绝激活。完全权限时无需确认。"
                     disabled={busy}
                     label="激活前确认"
                     onChange={next => void setFlag('requireApproval', next)}
