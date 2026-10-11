@@ -40,6 +40,26 @@ function renderPage(scope: ConfigurationScope, load: () => Promise<ActivationCat
 }
 
 describe('tool configuration page', () => {
+  it('pins the activator in the default section like every other base tool', async () => {
+    const custom: ActivationCatalog = {
+      enabled: true,
+      baseTools: ['activate_tools', 'read'],
+      basicTools: ['read'],
+      entries: [
+        { identifier: 'activate_tools', name: 'activate_tools', description: 'Enable tools on demand', tools: ['activate_tools'] },
+        { identifier: 'read', name: 'read', description: 'Read a file', tools: ['read'] },
+        { identifier: 'pwsh', name: 'pwsh', description: 'Run the shell', tools: ['pwsh'] },
+      ],
+    }
+    renderPage(scopeOf({ basicTools: ['read'] }), async () => custom)
+
+    expect(await screen.findByText('默认激活工具（2 个）')).toBeTruthy()
+    const activator = screen.getByRole('switch', { name: '默认加载 activate_tools' })
+    expect(activator).toHaveProperty('disabled', true)
+    expect(activator.getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByText('已安装但需先激活（1 个）')).toBeTruthy()
+  })
+
   it('lists the base tools before the tools the user added to the defaults', async () => {
     const custom: ActivationCatalog = {
       enabled: true,

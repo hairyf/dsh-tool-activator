@@ -4,7 +4,7 @@ import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { ToolPolicy } from './shared'
 import type { ActivationCatalog } from './types'
 import { buildToolCatalog } from './catalog'
-import { SETTINGS_REMOTE_NAMESPACE } from './constants'
+import { ACTIVATOR_TOOL_NAME, SETTINGS_REMOTE_NAMESPACE } from './constants'
 import { DEFAULT_POLICY } from './shared'
 
 const REMOTE_METHODS = '@deepseek-ai/dsh-typert-protocol/remote-methods'
@@ -40,16 +40,27 @@ export class ToolActivatorRemote {
 
   catalog(): ActivationCatalog {
     const policy = this.policy()
+    const activator: ToolSchema | undefined = this.schemas().find(schema => schema.name === ACTIVATOR_TOOL_NAME)
     return {
       enabled: policy.enabled,
       basicTools: [...policy.basicTools],
-      baseTools: [...DEFAULT_POLICY.basicTools],
-      entries: buildToolCatalog(this.schemas(), policy).map(entry => ({
-        identifier: entry.identifier,
-        name: entry.name,
-        description: entry.tools.length === 1 ? entry.tools[0]!.description : entry.description,
-        tools: entry.tools.map(tool => tool.name),
-      })),
+      // The activator is always loaded, so it belongs in the pinned set the page
+      // renders as base tools even though it is not part of the policy list.
+      baseTools: [ACTIVATOR_TOOL_NAME, ...DEFAULT_POLICY.basicTools],
+      entries: [
+        {
+          identifier: ACTIVATOR_TOOL_NAME,
+          name: ACTIVATOR_TOOL_NAME,
+          description: activator?.description ?? '',
+          tools: activator === undefined ? [] : [ACTIVATOR_TOOL_NAME],
+        },
+        ...buildToolCatalog(this.schemas(), policy).map(entry => ({
+          identifier: entry.identifier,
+          name: entry.name,
+          description: entry.tools.length === 1 ? entry.tools[0]!.description : entry.description,
+          tools: entry.tools.map(tool => tool.name),
+        })),
+      ],
     }
   }
 }
