@@ -112,3 +112,7 @@ MIT
 [jsdocs-href]: https://www.jsdocs.io/package/dsh-tool-activator
 [license-src]: https://img.shields.io/github/license/hairyf/dsh-tool-activator.svg?style=flat&colorA=080f12&colorB=1fa669
 [license-href]: https://github.com/hairyf/dsh-tool-activator/blob/main/LICENSE.md
+
+## 友情链接
+
+- [dsh-tui](https://github.com/ccch1mneyyy/dsh-TUI)
