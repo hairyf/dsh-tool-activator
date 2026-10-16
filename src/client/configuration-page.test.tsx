@@ -42,7 +42,7 @@ function renderPage(scope: ConfigurationScope, load: () => Promise<ActivationCat
 }
 
 describe('tool configuration page', () => {
-  it('pins the activator in the default section like every other base tool', async () => {
+  it('pins only the activator regardless of the configured defaults', async () => {
     const custom: ActivationCatalog = {
       autoGroupMcp: true,
       baseTools: ['activate_tools', 'read'],
@@ -55,13 +55,19 @@ describe('tool configuration page', () => {
       groups: [],
       requireApproval: true,
     }
-    renderPage(scopeOf({ basicTools: ['read'] }), async () => custom)
+    const scope = scopeOf({ basicTools: [] })
+    renderPage(scope, async () => custom)
 
-    expect(await screen.findByText('默认激活工具（2 个）')).toBeTruthy()
+    expect(await screen.findByText('默认激活工具（1 个）')).toBeTruthy()
     const activator = screen.getByRole('switch', { name: '默认加载 activate_tools' })
     expect(activator).toHaveProperty('disabled', true)
     expect(activator.getAttribute('aria-checked')).toBe('true')
-    expect(screen.getByText('已安装但需先激活（1 个）')).toBeTruthy()
+    activator.click()
+    expect(scope.mutate).not.toHaveBeenCalled()
+    const read = screen.getByRole('switch', { name: '默认加载 read' })
+    expect(read).toHaveProperty('disabled', false)
+    expect(read.getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByText('已安装但需先激活（2 个）')).toBeTruthy()
   })
 
   it('lists the base tools before the tools the user added to the defaults', async () => {
@@ -107,16 +113,26 @@ describe('tool configuration page', () => {
     expect(screen.getByText('mailbox group')).toBeTruthy()
   })
 
-  it('locks the plugin base tools so they cannot be disabled', async () => {
+  it('allows a base tool to be disabled and enabled again', async () => {
     const scope = scopeOf({ basicTools: ['read'] })
     renderPage(scope)
 
     const read = await screen.findByRole('switch', { name: '默认加载 read' })
-    expect(read).toHaveProperty('disabled', true)
+    expect(read).toHaveProperty('disabled', false)
     expect(screen.getByText('基础工具')).toBeTruthy()
 
     read.click()
-    expect(scope.mutate).not.toHaveBeenCalled()
+    await waitFor(() => expect(scope.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['basicTools'], value: [] }], 3))
+    expect(screen.getByText('默认激活工具（0 个）')).toBeTruthy()
+    expect(screen.getByText('已安装但需先激活（2 个）')).toBeTruthy()
+    const pending = screen.getByRole('switch', { name: '默认加载 read' })
+    expect(pending.getAttribute('aria-checked')).toBe('false')
+    await waitFor(() => expect(pending).toHaveProperty('disabled', false))
+
+    pending.click()
+    await waitFor(() => expect(scope.mutate).toHaveBeenLastCalledWith([{ op: 'set', path: ['basicTools'], value: ['read'] }], 3))
+    expect(screen.getByText('默认激活工具（1 个）')).toBeTruthy()
+    expect(screen.getByRole('switch', { name: '默认加载 read' }).getAttribute('aria-checked')).toBe('true')
     expect(screen.queryByRole('alert')).toBeNull()
   })
 

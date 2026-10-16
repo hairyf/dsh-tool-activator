@@ -380,10 +380,33 @@ describe('real rc.2 host contracts', () => {
     const result = await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use file utilities' })
     expect(receiptFromContent(result.content)?.state.activatedTools).toEqual([{ identifier: 'files', name: 'Files', apiCount: 3 }])
     const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'glob', 'grep', 'pwsh', 'read', 'web_search', 'write'])
+    expect(enabled.names).toEqual(['activate_tools', 'grep', 'pwsh', 'read', 'web_search'])
     expect(enabled.text).not.toContain('SHARED HIDDEN GUIDE')
-    expect(enabled.text).toContain('WRITE FULL GUIDE')
+    expect(enabled.text).not.toContain('WRITE FULL GUIDE')
     expect(enabled.text).toContain('WEB SEARCH FULL GUIDE')
+  })
+
+  it('honors removal of every basic tool while keeping the activator and on-demand loading', async () => {
+    const { ctx, makeAgent, setPolicy } = await fixture()
+    const { agent } = await makeAgent('empty-basics')
+    expect((await presentation(ctx, agent)).names).toContain('read')
+
+    setPolicy({ basicTools: [] })
+    const pending = await presentation(ctx, agent)
+    expect(pending.names).toEqual(['activate_tools'])
+    expect(pending.text).toContain('<tool identifier="read" name="read">')
+    expect(pending.text).not.toContain('READ FULL GUIDE')
+    expect(pending.text).not.toContain('WRITE FULL GUIDE')
+
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: ['read'], reason: 'Read a file on demand' })
+    expect(result.isError).toBe(false)
+    const activated = await presentation(ctx, agent)
+    expect(activated.names).toEqual(['activate_tools', 'read'])
+    expect(activated.text).toContain('READ FULL GUIDE')
+    expect(activated.text).not.toContain('WRITE FULL GUIDE')
+
+    const fresh = await makeAgent('empty-basics-fresh')
+    expect((await presentation(ctx, fresh.agent)).names).toEqual(['activate_tools'])
   })
 
   it('keeps a committed activation when the configuration is unchanged', async () => {

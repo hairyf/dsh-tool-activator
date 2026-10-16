@@ -19,7 +19,6 @@ import { emptyActivationHistory, foldActivationEvent, mergeActivation } from './
 import { filterPromptAssembly } from './prompt'
 import { provideToolActivatorRemote } from './remote'
 import { ActivatorExecutionRuntime } from './runtime'
-import { withBaseTools } from './shared'
 import { createActivatorTool } from './tool'
 import './session-projection'
 
@@ -150,8 +149,9 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
   })
 
   function policySnapshot(): ToolPolicy {
-    validatePolicy(config.get())
-    return withBaseTools(config.get())
+    const policy = config.get()
+    validatePolicy(policy)
+    return policy
   }
 
   function requireAgent(agent: Agent | undefined): Agent {

@@ -2,6 +2,7 @@ import type { ReactElement } from 'react'
 import type { ActivationCatalog, ActivationCatalogEntry } from '../types'
 import type { ConfigurationScope, ToolActivatorConfigurationProps, ToolGroupDraft } from './types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ACTIVATOR_TOOL_NAME } from '../constants'
 import { CLASSES } from './constants'
 import { GroupsEditor } from './groups-editor'
 import { ToolActivatorSwitch, ToolActivatorTag, ToolActivatorTooltip } from './primitives'
@@ -64,7 +65,7 @@ function isDefaultLoaded(entry: ActivationCatalogEntry, basicTools: readonly str
   return entry.tools.length > 0 && entry.tools.every(tool => basicTools.includes(tool))
 }
 
-/** The plugin's own base tools stay loaded whether or not the document lists them. */
+/** Factory defaults are labelled and sorted first, but remain configurable. */
 function isBaseTool(entry: ActivationCatalogEntry, baseTools: readonly string[]): boolean {
   return baseTools.length > 0 && entry.tools.length > 0 && entry.tools.every(tool => baseTools.includes(tool))
 }
@@ -170,7 +171,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     const active: ActivationCatalogEntry[] = []
     const pending: ActivationCatalogEntry[] = []
     for (const entry of entries)
-      (isBaseTool(entry, baseTools) || isDefaultLoaded(entry, basicTools) ? active : pending).push(entry)
+      (entry.identifier === ACTIVATOR_TOOL_NAME || isDefaultLoaded(entry, basicTools) ? active : pending).push(entry)
     // The plugin's own base tools head their section; everything the user added
     // after them, each group alphabetical.
     const byBaseThenName = (left: ActivationCatalogEntry, right: ActivationCatalogEntry): number => {
@@ -210,13 +211,13 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     return (
       <ul className={CLASSES.list}>
         {entries.map((entry) => {
-          const locked = isBaseTool(entry, baseTools)
+          const locked = entry.identifier === ACTIVATOR_TOOL_NAME
           return (
             <li className={CLASSES.row} key={entry.identifier}>
               <span className={CLASSES.rowText}>
                 <span className={CLASSES.rowName}>
                   {entry.name}
-                  {locked ? <ToolActivatorTag tone="neutral">基础工具</ToolActivatorTag> : null}
+                  {isBaseTool(entry, baseTools) ? <ToolActivatorTag tone="neutral">基础工具</ToolActivatorTag> : null}
                 </span>
                 <span className={CLASSES.rowMeta} title={entry.description || entry.tools.join('、')}>{entry.description || entry.tools.join('、')}</span>
               </span>

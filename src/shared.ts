@@ -14,11 +14,7 @@ export interface ToolPolicy {
   sectionTools: Readonly<Record<string, readonly string[]>>
 }
 
-/**
- * The tools this plugin always keeps loaded. A stored configuration can add to
- * the default set but never shrink it: these stay visible with full schemas
- * even when the profile pins an older `basicTools` list.
- */
+/** Factory defaults; an explicit basicTools list may add or remove any of these. */
 export const BASE_TOOLS: readonly string[] = ['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write']
 
 export const DEFAULT_POLICY: ToolPolicy = {
@@ -27,10 +23,6 @@ export const DEFAULT_POLICY: ToolPolicy = {
   autoGroupMcp: true,
   groups: [],
   sectionTools: {},
-}
-
-export function withBaseTools(policy: ToolPolicy): ToolPolicy {
-  return { ...policy, basicTools: [...new Set([...BASE_TOOLS, ...policy.basicTools])] }
 }
 
 export const PACKAGE_NAME = 'dsh-tool-activator'

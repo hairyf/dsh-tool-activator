@@ -44,8 +44,7 @@ export class ToolActivatorRemote {
     return {
       autoGroupMcp: policy.autoGroupMcp,
       basicTools: [...policy.basicTools],
-      // The activator is always loaded, so it belongs in the pinned set the page
-      // renders as base tools even though it is not part of the policy list.
+      // Base tools are labelled and sorted first; only the activator stays loaded.
       baseTools: [ACTIVATOR_TOOL_NAME, ...DEFAULT_POLICY.basicTools],
       entries: [
         {
