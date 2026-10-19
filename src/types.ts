@@ -1,6 +1,12 @@
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { ToolGroup } from './shared'
 
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'tool-activator': { kind: 'tool-activator' }
+  }
+}
+
 export interface ActivateToolsParams {
   identifiers: string[]
   reason: string

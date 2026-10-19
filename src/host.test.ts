@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
-import { createAssistantMessage, createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createToolResultMessage, projectToolUpdates, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
 import { SandboxPolicyService, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { createScope } from '@deepseek-ai/dsh-scope'
@@ -766,5 +766,71 @@ describe('real skill fallback and result policy', () => {
     expect(result.isError, JSON.stringify(result)).toBe(false)
     expect(receiptFromContent(result.content)?.state).toEqual({ activatedTools: [], activatedSkills: [], alreadyActive: [], notFound: ['safe-skill'] })
     expect((await presentation(ctx, agent)).text).not.toContain('RAW PRIVATE SKILL INSTRUCTIONS')
+  })
+})
+
+describe('cache-stable declarations on a route that reads mid-conversation tool changes', () => {
+  it('announces the activation instead of rewriting the request head', async () => {
+    const { ctx, makeAgent } = await fixture()
+    cleanups.push(ctx.provide('llm', { resolveModelInfo: async () => ({ toolUpdate: 'addition-only' }) }))
+    const { agent, events } = await makeAgent('appending-head')
+    agent.options.provider = 'fixture'
+    agent.options.model = 'fixture'
+    const initial = await ctx.systemPrompt.assemble({ scope: agent, agent })
+    const headerSeq = agent.session.append('request/header', {
+      header: { config: { provider: 'fixture', model: 'fixture' }, tools: initial.tools },
+      reason: 'initial',
+    }).seq
+
+    const result = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    expect(result.isError, JSON.stringify(result)).toBe(false)
+
+    const after = await ctx.systemPrompt.assemble({ scope: agent, agent })
+    expect(after.tools).toEqual(initial.tools)
+    expect(after.tools.find(tool => tool.name === DISCOVERABLE_TOOL)?.deferLoading).toBe(true)
+    expect(after.tools.filter(tool => tool.deferLoading !== true).map(tool => tool.name)).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
+
+    const announcement = events.filter(event => event.type === 'developer/message')
+    expect(announcement).toHaveLength(1)
+    expect(announcement[0]!.data).toMatchObject({
+      headerSeq,
+      message: { source: { kind: 'tool-activator' }, content: [{ type: 'tool-addition', toolName: DISCOVERABLE_TOOL }] },
+    })
+
+    // The wire projection keeps the stable declaration list and serves the
+    // addition after it, which is exactly what preserves the cached prefix.
+    const projected = projectToolUpdates(agent.session.deriveMessages(), after.tools, 'addition-only', agent.session.toolHistory())
+    expect(projected.tools?.map(tool => tool.name)).toEqual(initial.tools.map(tool => tool.name))
+    expect(projected.messages.filter(message => message.role === 'developer')).toHaveLength(1)
+  })
+
+  it('announces each newly enabled tool once and never re-announces it', async () => {
+    const { ctx, makeAgent } = await fixture()
+    cleanups.push(ctx.provide('llm', { resolveModelInfo: async () => ({ toolUpdate: 'addition-only' }) }))
+    const { agent, events } = await makeAgent('announce-once')
+    agent.options.provider = 'fixture'
+    agent.options.model = 'fixture'
+    const initial = await ctx.systemPrompt.assemble({ scope: agent, agent })
+    agent.session.append('request/header', {
+      header: { config: { provider: 'fixture', model: 'fixture' }, tools: initial.tools },
+      reason: 'initial',
+    })
+    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    await presentation(ctx, agent)
+    await presentation(ctx, agent)
+    expect(events.filter(event => event.type === 'developer/message')).toHaveLength(1)
+    expect((await presentation(ctx, agent)).text).toContain(DISCOVERABLE_GUIDE)
+  })
+
+  it('keeps rewriting the declaration list on a route that cannot read mid-conversation changes', async () => {
+    const { ctx, makeAgent } = await fixture()
+    cleanups.push(ctx.provide('llm', { resolveModelInfo: async () => ({}) }))
+    const { agent, events } = await makeAgent('plain-route')
+    agent.options.provider = 'fixture'
+    agent.options.model = 'fixture'
+    await presentation(ctx, agent)
+    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
+    expect(events.filter(event => event.type === 'developer/message')).toHaveLength(0)
   })
 })

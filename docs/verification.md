@@ -1,5 +1,16 @@
 # 源码验证记录
 
+## 2026-10-19：激活不再破坏前缀缓存
+
+问题：旧实现按激活状态过滤 `assembly.tools`，每次激活都重写请求头里的工具声明列表，提供方缓存前缀随之失效。
+
+- 真实端点实测（`api.deepseek.com/anthropic/v1/messages`、`deepseek-flash`、8.9K token 固定前缀）：相同请求第二次命中 8960；仅追加一个工具声明后掉到 128；声明不变、改为在会话尾部追加 `tool_addition` 时仍命中 8960，且模型能正常调用被声明的延迟工具。延迟声明本身不占 token（1 个普通工具 9207，再加 10 个延迟工具 9201），但接口要求至少保留一个非延迟工具。
+- 实现：路由支持 `toolUpdate` 时，把全部工具留在声明里，非基础工具标 `deferLoading`；激活只在 assemble 阶段追加一条带 `tool_addition` 的 developer 消息，引用当前 `request/header`。
+- 已追加的工具集合从当前 surface（`deriveMessages()`）读取而非日志，避免历史折叠丢掉公告后工具静默失效。
+- 真实 headless profile 验证（临时 `DSH_HOME` + `dsh --profile e2e` + 本地 `link:` 构建）：单次激活后连续两步 `cacheReadTokens` 9344 → 12544，新增计费仅 3118 / 174；会话日志只有一个 `request/header`，另有 1 条 `developer/message`。同一任务下旧版本产生 `initial` + `change` 两个 header。
+- 用例：新增 3 个宿主集成用例（声明表保持、公告只发一次、无能力路由退回过滤）与 2 个提示词用例；全量 12 文件 309 用例通过，lint、typecheck、build 均退出 `0`。
+- 未验证：真实 GUI 端到端与发布产物；`deepseek-v4-pro` 等未声明 `toolUpdate` 的路由仍走过滤路径，未实测其缓存代价。
+
 ## 2026-10-11：完全权限激活修复
 
 - 通过公开 `sandboxPolicy.resolve({ session })` 读取当前会话权限；`danger-full-access` 免去插件的激活确认，执行中校验、最终提交与 receipt 使用相同判断。未挂载 sandbox policy 时仍按插件配置要求审批。

@@ -3,20 +3,21 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-ptc-runtime'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
+import type { Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SkillDefinition, SkillViewOptions } from '@deepseek-ai/dsh-skill'
 import type { ToolExecution, ToolExecutionResult, ToolExecutionToken, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type { ToolActivatorConfig } from './config'
 import type { ToolPolicy } from './shared'
 import type { ActivateToolsParams, ActivationEnvelope, ActivationHistory, ActivationReceipt, ActivationResult, ToolCatalogItem } from './types'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createDeveloperMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { renderToolsSdk, renderToolsSdkPy } from '@deepseek-ai/dsh-tools'
 import { activationContent, activationEnvelope, activationHistorySchema, parseActivation } from './activation'
 import { buildToolCatalog, enabledToolNames } from './catalog'
 import { validatePolicy } from './config'
-import { ACTIVATION_CONTEXT_NAME, ACTIVATION_CONTEXT_ORDER, ACTIVATION_PRODUCER, ACTIVATION_PROJECTION_KEY, ACTIVATION_VERSION, ACTIVATOR_TOOL_NAME } from './constants'
+import { ACTIVATION_CONTEXT_NAME, ACTIVATION_CONTEXT_ORDER, ACTIVATION_PRODUCER, ACTIVATION_PROJECTION_KEY, ACTIVATION_VERSION, ACTIVATOR_SOURCE_KIND, ACTIVATOR_TOOL_NAME } from './constants'
 import { emptyActivationHistory, foldActivationEvent, mergeActivation } from './history'
-import { filterPromptAssembly } from './prompt'
+import { filterPromptAssembly, immediateToolNames } from './prompt'
 import { provideToolActivatorRemote } from './remote'
 import { ActivatorExecutionRuntime } from './runtime'
 import { createActivatorTool } from './tool'
@@ -39,10 +40,54 @@ interface DirectoryCapability {
   ensure: (agent: Agent, signal?: AbortSignal) => Promise<string>
 }
 
+/**
+ * What one session's request head already declares. Activation must not rewrite
+ * that head — a changed declaration list costs the provider's whole cached
+ * prefix — so a newly enabled tool is announced with a `tool_addition` after the
+ * cached history instead.
+ */
+interface AnnouncementState {
+  headerSeq?: SessionSeq
+  headerTools: Set<string>
+  turn: number
+  step: number
+}
+
+/** Fold one session event into what this session's head already declares. */
+function foldAnnouncement(state: AnnouncementState, event: SessionEvent): void {
+  if (event.type === 'request/header') {
+    state.headerSeq = event.seq
+    state.headerTools = new Set((event.data.header.tools ?? []).map(tool => tool.name))
+  }
+  if ('turn' in event.data && 'step' in event.data) {
+    state.turn = event.data.turn
+    state.step = event.data.step
+  }
+}
+
+/**
+ * Tools an earlier `tool_addition` already serves. Read from the current
+ * surface rather than the log: a fold that drops the announcement has to be
+ * re-issued, or the model silently loses a tool it already activated.
+ */
+function announcedNames(session: Session): Set<string> {
+  const names = new Set<string>()
+  for (const message of session.deriveMessages()) {
+    if (message.role !== 'developer' || message.source.kind !== ACTIVATOR_SOURCE_KIND)
+      continue
+    for (const block of message.content) {
+      if (block.type === 'tool-addition')
+        names.add(block.toolName)
+    }
+  }
+  return names
+}
+
 export function installToolActivator(ctx: Context, config: ToolActivatorConfig): void {
   const lifetime = new AbortController()
   const executions = new Map<ToolExecutionToken, ActivationExecution>()
   const receipts = new Map<string, PtcReceipt>()
+  const announcements = new Map<string, AnnouncementState>()
   let approval: Context['approval'] | undefined
   let skills: Context['skills'] | undefined
   ctx.inject(['approval'], (owner) => {
@@ -68,6 +113,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     lifetime.abort()
     executions.clear()
     receipts.clear()
+    announcements.clear()
   })
   ctx.sessionProjections.register({
     key: ACTIVATION_PROJECTION_KEY,
@@ -111,7 +157,10 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     const sdk = assembly.sections.some(section => section.name === 'tools:sdk' && section.text.length > 0)
       ? renderSdk(agent, ctx.tools.schemas(agent).filter(schema => schema.name !== 'run_code' && enabled.has(schema.name)))
       : undefined
-    return filterPromptAssembly(assembly, catalog, policy, enabled, sdk, instructions)
+    const appending = await supportsToolAdditions(agent)
+    if (appending)
+      announce(agent, enabled, policy)
+    return filterPromptAssembly(assembly, catalog, policy, enabled, sdk, instructions, appending)
   })
   ctx.on('tools/ptc-dispatch-log', async (dispatch, next) => {
     const content = await next()
@@ -136,6 +185,9 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
   })
   ctx.on('agent/disposed', ({ agent }) => clearAgent(agent))
   ctx.on('session/event', (session, event) => {
+    const state = announcements.get(session.id)
+    if (state)
+      foldAnnouncement(state, event)
     if (event.type !== 'turn/end')
       return
     for (const [token, value] of executions) {
@@ -158,6 +210,71 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     if (lifetime.signal.aborted || !agent || ctx.agents.get(agent.id) !== agent)
       throw new Error('dsh-tool-activator requires an exact live agent')
     return agent
+  }
+
+  /**
+   * Whether this route reads tool declarations that change mid-conversation.
+   * Routes without the capability must keep an exactly-filtered declaration
+   * list: deferring there would either leak every hidden schema or hide a tool
+   * the model can never load.
+   */
+  async function supportsToolAdditions(agent: Agent): Promise<boolean> {
+    // Options are known before the first request; the logged request context
+    // only appears after it, and the very first request must already carry the
+    // stable declaration list.
+    const route = agent.session.requestContext()
+    const provider = agent.options.provider ?? route?.provider
+    const model = agent.options.model ?? route?.model
+    const llm = ctx.get('llm')
+    if (!provider || !model || !llm)
+      return false
+    try {
+      const info = await llm.resolveModelInfo(provider, model)
+      return info.toolUpdate !== undefined
+    }
+    catch {
+      return false
+    }
+  }
+
+  /**
+   * Announce newly enabled tools after the cached history. One `tool_addition`
+   * loads a deferred declaration without touching the request head, so the
+   * provider's cached prefix survives.
+   */
+  function announce(agent: Agent, enabled: ReadonlySet<string>, policy: ToolPolicy): void {
+    const session = agent.session
+    const state = announcementState(session)
+    if (state.headerSeq === undefined)
+      return
+    const immediate = immediateToolNames(policy)
+    const candidates = [...enabled].filter(name => !immediate.has(name) && state.headerTools.has(name))
+    if (candidates.length === 0)
+      return
+    const announced = announcedNames(session)
+    const pending = candidates.filter(name => !announced.has(name))
+    if (pending.length === 0)
+      return
+    session.append('developer/message', {
+      turn: state.turn,
+      step: state.step,
+      headerSeq: state.headerSeq,
+      message: createDeveloperMessage({
+        source: { kind: ACTIVATOR_SOURCE_KIND },
+        content: pending.map(name => ({ type: 'tool-addition' as const, toolName: name })),
+      }),
+    }, { surfaceOp: 'append' })
+  }
+
+  function announcementState(session: Session): AnnouncementState {
+    const existing = announcements.get(session.id)
+    if (existing)
+      return existing
+    const created: AnnouncementState = { headerTools: new Set(), turn: 0, step: 0 }
+    for (const event of session.snapshotEvents())
+      foldAnnouncement(created, event)
+    announcements.set(session.id, created)
+    return created
   }
 
   function requiresApproval(agent: Agent, policy: ToolPolicy): boolean {
@@ -351,5 +468,6 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
       if (value.agent === agent)
         receipts.delete(callId)
     }
+    announcements.delete(agent.session.id)
   }
 }

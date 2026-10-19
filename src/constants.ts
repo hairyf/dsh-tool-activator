@@ -1,4 +1,7 @@
 export const ACTIVATOR_TOOL_NAME = 'activate_tools'
+export const RUN_CODE_TOOL_NAME = 'run_code'
+/** Message source of the developer messages that declare activated tools. */
+export const ACTIVATOR_SOURCE_KIND = 'tool-activator'
 export const ACTIVATION_PRODUCER = 'dsh-tool-activator'
 export const ACTIVATION_VERSION = 1
 export const ACTIVATION_PROJECTION_KEY = 'tool-activator:activation'

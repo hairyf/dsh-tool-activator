@@ -1,9 +1,10 @@
+import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { AssembledSection, PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type { ToolPolicy } from './shared'
 import type { ToolCatalogItem } from './types'
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { availableToolsForDiscovery, sectionToolDependencies } from './catalog'
-import { ACTIVATION_CONTEXT_NAME, ACTIVATOR_TOOL_NAME } from './constants'
+import { ACTIVATION_CONTEXT_NAME, ACTIVATOR_TOOL_NAME, RUN_CODE_TOOL_NAME } from './constants'
 
 export function escapeXml(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll('\'', '&apos;')
@@ -59,7 +60,7 @@ export function activationPrompt(assembly: PromptAssembly, catalog: readonly Too
   return parts.join('\n\n')
 }
 
-export function filterPromptAssembly(assembly: PromptAssembly, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, sdk: string | undefined, skillInstructions: readonly string[] = []): PromptAssembly {
+export function filterPromptAssembly(assembly: PromptAssembly, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, sdk: string | undefined, skillInstructions: readonly string[] = [], deferDeclarations = false): PromptAssembly {
   if (!assembly.contexts.some(context => context.name === ACTIVATION_CONTEXT_NAME))
     throw new Error('dsh-tool-activator requires runtime context; enable it or disable the plugin for this agent')
   const prepared = {
@@ -69,11 +70,32 @@ export function filterPromptAssembly(assembly: PromptAssembly, catalog: readonly
   const dependencies = sectionToolDependencies(catalog, policy)
   return {
     ...assembly,
-    tools: assembly.tools.filter(tool => enabledNames.has(tool.name)),
+    tools: deferDeclarations
+      ? deferredToolSchemas(assembly.tools, policy)
+      : assembly.tools.filter(tool => enabledNames.has(tool.name)),
     sections: prepared.sections.filter(section => !Object.hasOwn(dependencies, section.name) && section.name !== 'tools:sdk'),
     variables: {
       ...assembly.variables,
       tool_activator_context: activationPrompt(prepared, catalog, policy, enabledNames, skillInstructions),
     },
   }
+}
+
+/**
+ * Keep every declaration in place so the request head stays byte-stable, and
+ * defer the ones the model may not use yet. A stable head is what lets the
+ * provider reuse its cached prefix; activation then only appends a
+ * `tool_addition`, which is served after the cached history.
+ *
+ * Non-deferred declarations are required by the endpoint (it rejects a fully
+ * deferred tool list), so the always-visible tools stay immediate.
+ */
+function deferredToolSchemas(tools: readonly ToolSchema[], policy: ToolPolicy): ToolSchema[] {
+  const immediate = new Set([ACTIVATOR_TOOL_NAME, RUN_CODE_TOOL_NAME, ...policy.basicTools])
+  return tools.map(tool => immediate.has(tool.name) || tool.deferLoading === true ? tool : { ...tool, deferLoading: true as const })
+}
+
+/** The head-stable tool names: always declared without deferral. */
+export function immediateToolNames(policy: ToolPolicy): ReadonlySet<string> {
+  return new Set([ACTIVATOR_TOOL_NAME, RUN_CODE_TOOL_NAME, ...policy.basicTools])
 }

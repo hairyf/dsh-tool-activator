@@ -176,6 +176,36 @@ describe('activationPrompt', () => {
   })
 })
 
+describe('filterPromptAssembly with deferDeclarations', () => {
+  it('keeps every declaration and defers only the tools the model cannot call yet', () => {
+    const source = assembly()
+    const catalog = [entry('read', [source.tools[0]!]), entry('write', [source.tools[1]!])]
+    const initial = filterPromptAssembly(source, catalog, policy(), new Set(['read', 'activate_tools', 'run_code']), undefined, [], true)
+
+    expect(initial.tools.map(tool => [tool.name, tool.deferLoading === true])).toEqual([
+      ['read', false],
+      ['write', true],
+      ['activate_tools', false],
+      ['run_code', false],
+    ])
+    expect(source.tools[1]!.deferLoading).toBeUndefined()
+  })
+
+  it('keeps the declaration list byte-identical after an activation, so the request head survives the cache', () => {
+    const source = assembly()
+    const catalog = [entry('read', [source.tools[0]!]), entry('write', [source.tools[1]!])]
+    const before = filterPromptAssembly(source, catalog, policy(), new Set(['read', 'activate_tools', 'run_code']), undefined, [], true)
+    const after = filterPromptAssembly(source, catalog, policy(), new Set(['read', 'write', 'activate_tools', 'run_code']), undefined, [], true)
+
+    expect(after.tools).toEqual(before.tools)
+    expect(JSON.stringify(after.tools)).toBe(JSON.stringify(before.tools))
+    // The activation still reaches the model — through the prompt text, which the
+    // host appends after the cached history rather than rewriting in place.
+    expect(rendered(after)).not.toBe(rendered(before))
+    expect(after.variables.tool_activator_context).toContain('write: Write a file')
+  })
+})
+
 describe('filterPromptAssembly', () => {
   it('preserves unrelated assembly data, filters native schemas, and injects each body only once across real renderers', () => {
     const source = assembly()
