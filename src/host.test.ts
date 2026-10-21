@@ -822,6 +822,32 @@ describe('cache-stable declarations on a route that reads mid-conversation tool 
     expect((await presentation(ctx, agent)).text).toContain(DISCOVERABLE_GUIDE)
   })
 
+  it('waits for the next open step instead of writing into a closed one', async () => {
+    const { ctx, makeAgent } = await fixture()
+    cleanups.push(ctx.provide('llm', { resolveModelInfo: async () => ({ toolUpdate: 'addition-only' }) }))
+    const { agent, events } = await makeAgent('announce-closed-step')
+    agent.options.provider = 'fixture'
+    agent.options.model = 'fixture'
+    const initial = await ctx.systemPrompt.assemble({ scope: agent, agent })
+    agent.session.append('request/header', {
+      header: { config: { provider: 'fixture', model: 'fixture' }, tools: initial.tools },
+      reason: 'initial',
+    })
+    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+
+    // `developer/message` is step-scoped; between `step/end` and the next
+    // `step/start` the last coordinates name a closed step.
+    agent.session.append('step/end', { turn: 1, step: 1 })
+    await presentation(ctx, agent)
+    expect(events.filter(event => event.type === 'developer/message')).toHaveLength(0)
+
+    agent.session.append('step/start', { turn: 1, step: 2 })
+    await presentation(ctx, agent)
+    const announcements = events.filter(event => event.type === 'developer/message')
+    expect(announcements).toHaveLength(1)
+    expect(announcements[0]!.data).toMatchObject({ turn: 1, step: 2 })
+  })
+
   it('keeps rewriting the declaration list on a route that cannot read mid-conversation changes', async () => {
     const { ctx, makeAgent } = await fixture()
     cleanups.push(ctx.provide('llm', { resolveModelInfo: async () => ({}) }))

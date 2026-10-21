@@ -51,6 +51,12 @@ interface AnnouncementState {
   headerTools: Set<string>
   turn: number
   step: number
+  /**
+   * A `developer/message` is a step-scoped event: outside an open step the log
+   * rejects it as corrupt. `step/end` closes the step before the next
+   * `step/start`, so the last known coordinates are not writable in that gap.
+   */
+  stepOpen: boolean
 }
 
 /** Fold one session event into what this session's head already declares. */
@@ -63,6 +69,10 @@ function foldAnnouncement(state: AnnouncementState, event: SessionEvent): void {
     state.turn = event.data.turn
     state.step = event.data.step
   }
+  if (event.type === 'step/start')
+    state.stepOpen = true
+  else if (event.type === 'step/end')
+    state.stepOpen = false
 }
 
 /**
@@ -245,7 +255,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
   function announce(agent: Agent, enabled: ReadonlySet<string>, policy: ToolPolicy): void {
     const session = agent.session
     const state = announcementState(session)
-    if (state.headerSeq === undefined)
+    if (state.headerSeq === undefined || !state.stepOpen)
       return
     const immediate = immediateToolNames(policy)
     const candidates = [...enabled].filter(name => !immediate.has(name) && state.headerTools.has(name))
@@ -270,7 +280,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     const existing = announcements.get(session.id)
     if (existing)
       return existing
-    const created: AnnouncementState = { headerTools: new Set(), turn: 0, step: 0 }
+    const created: AnnouncementState = { headerTools: new Set(), turn: 0, step: 0, stepOpen: false }
     for (const event of session.snapshotEvents())
       foldAnnouncement(created, event)
     announcements.set(session.id, created)
