@@ -1,4 +1,8 @@
-# dsh-tool-activator
+<div align="center"><a name="readme-top"></a>
+
+<img src="./public/hero.png" alt="安装插件" />
+
+# DSH Tool Activator
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
@@ -7,6 +11,7 @@
 [![License][license-src]][license-href]
 
 为 DeepSeek Harness (DSH) 减少初始工具上下文：默认仅展示基础工具，其余工具通过 `activate_tools` 按需加载。
+</div>
 
 * **系统要求**：DSH $\ge$ `0.2.0-rc.2`；Node.js $\ge$ `22.19.0`。
 
