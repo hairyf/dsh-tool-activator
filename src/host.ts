@@ -11,7 +11,6 @@ import type { ToolActivatorConfig } from './config'
 import type { ToolPolicy } from './shared'
 import type { ActivateToolsParams, ActivationEnvelope, ActivationHistory, ActivationReceipt, ActivationResult, ToolCatalogItem } from './types'
 import { createDeveloperMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
-import { renderToolsSdk, renderToolsSdkPy } from '@deepseek-ai/dsh-tools'
 import { activationContent, activationEnvelope, activationHistorySchema, parseActivation } from './activation'
 import { buildToolCatalog, enabledToolNames } from './catalog'
 import { validatePolicy } from './config'
@@ -20,6 +19,7 @@ import { emptyActivationHistory, foldActivationEvent, mergeActivation } from './
 import { filterPromptAssembly, immediateToolNames } from './prompt'
 import { provideToolActivatorRemote } from './remote'
 import { ActivatorExecutionRuntime } from './runtime'
+import { loadToolSdkRenderers } from './sdk-render'
 import { createActivatorTool } from './tool'
 import './session-projection'
 
@@ -165,7 +165,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
       ? history.activatedSkills.flatMap(skill => skill.instructions === undefined ? [] : [skill.instructions])
       : []
     const sdk = assembly.sections.some(section => section.name === 'tools:sdk' && section.text.length > 0)
-      ? renderSdk(agent, ctx.tools.schemas(agent).filter(schema => schema.name !== 'run_code' && enabled.has(schema.name)))
+      ? await renderSdk(agent, ctx.tools.schemas(agent).filter(schema => schema.name !== 'run_code' && enabled.has(schema.name)))
       : undefined
     const appending = await supportsToolAdditions(agent)
     if (appending)
@@ -311,7 +311,8 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     return buildToolCatalog(ctx.tools.schemas(agent), policy)
   }
 
-  function renderSdk(agent: Agent, candidates: ReturnType<Context['tools']['schemas']>): string {
+  async function renderSdk(agent: Agent, candidates: ReturnType<Context['tools']['schemas']>): Promise<string> {
+    const { renderToolsSdk, renderToolsSdkPy } = await loadToolSdkRenderers()
     const schemas: Parameters<typeof renderToolsSdk>[0] = []
     for (const schema of candidates) {
       if (schema.name === 'run_code')
