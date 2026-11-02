@@ -1,4 +1,5 @@
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type { ToolGroup } from './shared'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -127,3 +128,11 @@ export interface ActivationCatalog {
   groups: ToolGroup[]
   requireApproval: boolean
 }
+
+/**
+ * What the prompt-assembly waterfall actually receives. Hosts before dsh 0.2.2
+ * handed over the tool declarations in the same object; from 0.2.2 the waterfall
+ * receives a bare presentation and the provider-owned schemas are merged
+ * afterwards, so `tools` must be treated as optional rather than assumed.
+ */
+export type AssembledPrompt = Omit<PromptAssembly, 'tools'> & { tools?: readonly ToolSchema[] }

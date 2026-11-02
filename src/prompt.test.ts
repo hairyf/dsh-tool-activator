@@ -1,7 +1,7 @@
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { AssembledSection, PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type { ToolPolicy } from './shared'
-import type { ToolCatalogItem } from './types'
+import type { AssembledPrompt, ToolCatalogItem } from './types'
 import { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { describe, expect, it } from 'vitest'
 import { activationPrompt, activatorSystemPrompt, availableToolsPrompts, escapeXml, filterPromptAssembly, selectToolSections } from './prompt'
@@ -57,8 +57,9 @@ function assembly(): PromptAssembly {
   }
 }
 
-function rendered(value: PromptAssembly): string {
-  return `${renderPrompt(value)}\n\n${renderContextSnapshot(value)}`
+function rendered(value: AssembledPrompt): string {
+  const full: PromptAssembly = { ...value, tools: [...(value.tools ?? [])] }
+  return `${renderPrompt(full)}\n\n${renderContextSnapshot(full)}`
 }
 
 describe('escapeXml', () => {
@@ -182,7 +183,7 @@ describe('filterPromptAssembly with deferDeclarations', () => {
     const catalog = [entry('read', [source.tools[0]!]), entry('write', [source.tools[1]!])]
     const initial = filterPromptAssembly(source, catalog, policy(), new Set(['read', 'activate_tools', 'run_code']), undefined, [], true)
 
-    expect(initial.tools.map(tool => [tool.name, tool.deferLoading === true])).toEqual([
+    expect(initial.tools!.map(tool => [tool.name, tool.deferLoading === true])).toEqual([
       ['read', false],
       ['write', true],
       ['activate_tools', false],
@@ -215,8 +216,8 @@ describe('filterPromptAssembly', () => {
     const result = filterPromptAssembly(source, catalog, policy(), new Set(['read', 'activate_tools', 'run_code']), sdk, ['SKILL_BODY'])
     const output = rendered(result)
 
-    expect(result.tools.map(schema => schema.name)).toEqual(['read', 'activate_tools', 'run_code'])
-    expect(result.tools[0]).toBe(source.tools[0])
+    expect(result.tools!.map(schema => schema.name)).toEqual(['read', 'activate_tools', 'run_code'])
+    expect(result.tools![0]).toBe(source.tools[0])
     expect(result.contexts).toEqual(source.contexts)
     expect(result.variables.safety).toBe('SAFETY_BODY')
     expect(result.variables.other).toBe('unchanged')
@@ -254,7 +255,7 @@ describe('filterPromptAssembly', () => {
     const result = filterPromptAssembly(source, catalog, policy(), new Set(['read', 'run_code']), 'SCOPED_SDK_BODY')
     const output = rendered(result)
 
-    expect(result.tools.map(schema => schema.name)).toEqual(['read', 'run_code'])
+    expect(result.tools!.map(schema => schema.name)).toEqual(['read', 'run_code'])
     expect(output).not.toContain('WRITE_USAGE_BODY')
     expect(output).toContain('Never reveal secrets. Preserve SAFETY_BODY.')
     expect(output.split('READ_USAGE_BODY')).toHaveLength(2)
@@ -307,5 +308,24 @@ describe('filterPromptAssembly', () => {
     expect(activeOutput.split('CONSTRUCTOR_SAFETY_BODY')).toHaveLength(2)
     expect(active.variables.tool_activator_context).toContain('PROTOTYPE_SAFETY_BODY')
     expect(active.variables.tool_activator_context).toContain('CONSTRUCTOR_SAFETY_BODY')
+  })
+})
+
+describe('filterPromptAssembly when the host owns tool declarations', () => {
+  it('degrades to sections and variables instead of dereferencing a missing tool list', () => {
+    const source = assembly()
+    const catalog = [entry('read', [source.tools[0]!]), entry('write', [source.tools[1]!])]
+    // dsh 0.2.2 hands the waterfall a presentation and merges the provider-owned
+    // tool schemas afterwards, so this is what the plugin actually receives.
+    const presentation: AssembledPrompt = { ...source }
+    delete presentation.tools
+
+    const result = filterPromptAssembly(presentation, catalog, policy(), new Set(['read', 'activate_tools', 'run_code']), 'SCOPED_SDK_BODY')
+
+    expect(result.tools).toBeUndefined()
+    expect(result.sections.map(section => section.name)).toEqual(['identity', 'unknown:safety', 'other:plugin'])
+    expect(result.variables.tool_activator_context).toContain('read: Read a file')
+    expect(result.variables.tool_activator_context).not.toContain('write: Write a file')
+    expect(rendered(result)).not.toContain('WRITE_USAGE_BODY')
   })
 })

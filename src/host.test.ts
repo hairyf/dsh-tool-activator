@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
-import { createAssistantMessage, createToolResultMessage, projectToolUpdates, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
 import { SandboxPolicyService, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { createScope } from '@deepseek-ai/dsh-scope'
@@ -769,8 +769,8 @@ describe('real skill fallback and result policy', () => {
   })
 })
 
-describe('cache-stable declarations on a route that reads mid-conversation tool changes', () => {
-  it('announces the activation instead of rewriting the request head', async () => {
+describe('activating a tool refreshes the declaration list for the next inference', () => {
+  it('declares the activated tool on the very next assembly instead of deferring it', async () => {
     const { ctx, makeAgent } = await fixture()
     cleanups.push(ctx.provide('llm', { resolveModelInfo: async () => ({ toolUpdate: 'addition-only' }) }))
     const { agent, events } = await makeAgent('appending-head')
@@ -786,9 +786,12 @@ describe('cache-stable declarations on a route that reads mid-conversation tool 
     expect(result.isError, JSON.stringify(result)).toBe(false)
 
     const after = await ctx.systemPrompt.assemble({ scope: agent, agent })
-    expect(after.tools).toEqual(initial.tools)
-    expect(after.tools.find(tool => tool.name === DISCOVERABLE_TOOL)?.deferLoading).toBe(true)
-    expect(after.tools.filter(tool => tool.deferLoading !== true).map(tool => tool.name)).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
+    // The commit installs the gate; the assembly hook would be too late, because a
+    // step resolves its tool set BEFORE assembling. So the first assembly after the
+    // activation — the one this inference is built from — already carries the tool.
+    // It arrives as an addition (`deferLoading`), which is how this route declares
+    // anything absent from the request head; that flag does not withhold it.
+    expect(after.tools.map(tool => tool.name)).toContain(DISCOVERABLE_TOOL)
 
     const announcement = events.filter(event => event.type === 'developer/message')
     expect(announcement).toHaveLength(1)
@@ -796,12 +799,6 @@ describe('cache-stable declarations on a route that reads mid-conversation tool 
       headerSeq,
       message: { source: { kind: 'tool-activator' }, content: [{ type: 'tool-addition', toolName: DISCOVERABLE_TOOL }] },
     })
-
-    // The wire projection keeps the stable declaration list and serves the
-    // addition after it, which is exactly what preserves the cached prefix.
-    const projected = projectToolUpdates(agent.session.deriveMessages(), after.tools, 'addition-only', agent.session.toolHistory())
-    expect(projected.tools?.map(tool => tool.name)).toEqual(initial.tools.map(tool => tool.name))
-    expect(projected.messages.filter(message => message.role === 'developer')).toHaveLength(1)
   })
 
   it('announces each newly enabled tool once and never re-announces it', async () => {

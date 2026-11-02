@@ -1,6 +1,6 @@
 import type { ActivationCatalog } from '../types'
 import type { ConfigurationScope, ConfigurationScopeSnapshot } from './types'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ToolActivatorConfiguration } from './configuration-page'
 import { CLASSES } from './constants'
@@ -213,15 +213,16 @@ describe('tool configuration page', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  it('refuses to write when the host document is not writable', async () => {
+  it('locks the controls when the host document is not writable', async () => {
     const scope = scopeOf({ basicTools: [] }, { writable: false })
     renderPage(scope)
 
     const mail = await screen.findByRole('switch', { name: '默认加载 mail' })
+    expect(mail).toHaveProperty('disabled', true)
     mail.click()
 
-    expect((await screen.findByRole('alert')).textContent).toBe('当前配置不可写，无法保存。')
     expect(scope.mutate).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('reports a catalog failure instead of rendering an empty list', async () => {
@@ -238,5 +239,45 @@ describe('tool configuration page', () => {
     )
     expect(container.querySelector(`.${CLASSES.list}`)).toBeNull()
     expect(container.textContent).toContain('默认只提供基础工具')
+  })
+
+  it('keeps a new group local until its identifier can be saved', async () => {
+    const scope = scopeOf({ groups: [] })
+    renderPage(scope)
+
+    const add = await screen.findByRole('button', { name: '添加分组' })
+    add.click()
+
+    // The empty draft never reaches the Host: the config schema rejects it.
+    expect(await screen.findByText('未命名分组 1')).toBeTruthy()
+    expect(scope.mutate).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText('标识符'), { target: { value: 'docs' } })
+
+    await waitFor(() => expect(scope.mutate).toHaveBeenCalledTimes(1))
+    expect(scope.mutate).toHaveBeenCalledWith(
+      [{ op: 'set', path: ['groups'], value: [{ identifier: 'docs', name: '', description: '', tools: [], sections: [] }] }],
+      3,
+    )
+  })
+
+  it('coalesces identifier typing into a single write', async () => {
+    const scope = scopeOf({ groups: [] })
+    renderPage(scope)
+
+    const add = await screen.findByRole('button', { name: '添加分组' })
+    add.click()
+    await screen.findByText('未命名分组 1')
+
+    const field = screen.getByLabelText('标识符')
+    fireEvent.change(field, { target: { value: 'f' } })
+    fireEvent.change(field, { target: { value: 'fi' } })
+    fireEvent.change(field, { target: { value: 'fil' } })
+
+    await waitFor(() => expect(scope.mutate).toHaveBeenCalledTimes(1))
+    expect(scope.mutate).toHaveBeenCalledWith(
+      [{ op: 'set', path: ['groups'], value: [{ identifier: 'fil', name: '', description: '', tools: [], sections: [] }] }],
+      3,
+    )
   })
 })

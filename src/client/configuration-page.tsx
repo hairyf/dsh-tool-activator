@@ -3,7 +3,8 @@ import type { ActivationCatalog, ActivationCatalogEntry } from '../types'
 import type { ConfigurationScope, ToolActivatorConfigurationProps, ToolGroupDraft } from './types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ACTIVATOR_TOOL_NAME } from '../constants'
-import { CLASSES } from './constants'
+import { CLASSES, GROUPS_WRITE_DELAY_MS } from './constants'
+import { groupsSavable } from './groups'
 import { GroupsEditor } from './groups-editor'
 import { ToolActivatorSwitch, ToolActivatorTag, ToolActivatorTooltip } from './primitives'
 
@@ -70,6 +71,12 @@ function isBaseTool(entry: ActivationCatalogEntry, baseTools: readonly string[])
   return baseTools.length > 0 && entry.tools.length > 0 && entry.tools.every(tool => baseTools.includes(tool))
 }
 
+/** A read-only or unavailable document accepts no writes, so the controls lock. */
+function isReadOnly(scope: ConfigurationScope): boolean {
+  const snapshot = scope.getSnapshot()
+  return snapshot.status !== 'ready' || !snapshot.writable
+}
+
 export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog }: ToolActivatorConfigurationProps): ReactElement | null {
   const [basicTools, setBasicTools] = useState<string[]>(() => readList(configScope, 'basicTools') ?? [])
   const [flags, setFlags] = useState(() => ({
@@ -79,14 +86,21 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
   const [groups, setGroups] = useState<ToolGroupDraft[] | undefined>(() => readGroups(configScope))
   const [catalog, setCatalog] = useState<ActivationCatalog | undefined>(undefined)
   const [failure, setFailure] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [readOnly, setReadOnly] = useState(() => isReadOnly(configScope))
   const aliveRef = useRef(true)
+  const groupsTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pendingGroupsRef = useRef<ToolGroupDraft[] | undefined>(undefined)
 
   useEffect(() => {
     aliveRef.current = true
     return () => {
       aliveRef.current = false
     }
+  }, [])
+
+  useEffect(() => () => {
+    if (groupsTimerRef.current !== undefined)
+      clearTimeout(groupsTimerRef.current)
   }, [])
 
   useEffect(() => {
@@ -96,7 +110,11 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
         requireApproval: readFlag(configScope, 'requireApproval'),
         autoGroupMcp: readFlag(configScope, 'autoGroupMcp'),
       })
-      setGroups(readGroups(configScope))
+      setReadOnly(isReadOnly(configScope))
+      // A pending debounce owns the draft: the Host still holds the older list,
+      // and adopting it here would drop the characters just typed.
+      if (groupsTimerRef.current === undefined)
+        setGroups(readGroups(configScope))
     }
     return configScope.subscribe(sync)
   }, [configScope])
@@ -125,17 +143,16 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
   /** One write path for every control on the page: optimistic, then verified. */
   const write = useCallback(async (field: string, value: unknown, revert: () => void): Promise<boolean> => {
     const snapshot = configScope.getSnapshot()
-    if (snapshot.status !== 'ready' || !snapshot.writable) {
+    if (isReadOnly(configScope)) {
       setFailure('当前配置不可写，无法保存。')
       return false
     }
-    setBusy(true)
     setFailure('')
     try {
       const accepted = await configScope.mutate([{ op: 'set', path: [field], value }], snapshot.revision)
       if (!accepted && aliveRef.current) {
         revert()
-        setFailure('宿主拒绝了本次修改。')
+        setFailure('宿主拒绝了本次修改：配置未通过校验，或与其他修改冲突。')
       }
       return accepted
     }
@@ -145,10 +162,6 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
         setFailure(problem instanceof Error ? problem.message : String(problem))
       }
       return false
-    }
-    finally {
-      if (aliveRef.current)
-        setBusy(false)
     }
   }, [configScope])
 
@@ -197,11 +210,35 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     await write(field, next, () => setFlags(previous))
   }, [flags, write])
 
-  const applyGroups = useCallback(async (next: ToolGroupDraft[]): Promise<void> => {
-    const previous = groupsForEditor
+  /**
+   * The draft stays local until it is savable, and a savable draft commits on a
+   * short debounce: writing per keystroke would round-trip the Host on every
+   * character, re-render the field, and drop the caret.
+   */
+  const applyGroups = useCallback((next: ToolGroupDraft[]): void => {
     setGroups(next)
-    await write('groups', next, () => setGroups(previous))
-  }, [groupsForEditor, write])
+    if (!groupsSavable(next)) {
+      setFailure('')
+      return
+    }
+    if (groupsTimerRef.current !== undefined)
+      clearTimeout(groupsTimerRef.current)
+    pendingGroupsRef.current = next
+    groupsTimerRef.current = setTimeout(() => {
+      groupsTimerRef.current = undefined
+      pendingGroupsRef.current = undefined
+      void write('groups', next, () => setGroups(readGroups(configScope) ?? []))
+    }, GROUPS_WRITE_DELAY_MS)
+  }, [configScope, write])
+
+  /** Leaving the page must not drop an edit still waiting for its debounce. */
+  const flushGroups = useCallback((): void => {
+    const pending = pendingGroupsRef.current
+    pendingGroupsRef.current = undefined
+    if (pending !== undefined)
+      void write('groups', pending, () => setGroups(readGroups(configScope) ?? []))
+  }, [configScope, write])
+  useEffect(() => flushGroups, [flushGroups])
 
   if (view === 'summary')
     return <p className={CLASSES.description}>默认只提供基础工具，其余工具由模型按需加载。</p>
@@ -223,7 +260,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
               </span>
               <ToolActivatorSwitch
                 checked={locked || isDefaultLoaded(entry, basicTools)}
-                disabled={busy || locked}
+                disabled={readOnly || locked}
                 label={`默认加载 ${entry.name}`}
                 onChange={next => void toggle(entry, next)}
               />
@@ -251,14 +288,14 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                   <SettingRow
                     checked={requireApproval}
                     description="非完全权限时，激活工具前先请求你的确认；没有可用的审批服务时直接拒绝激活。完全权限时无需确认。"
-                    disabled={busy}
+                    disabled={readOnly}
                     label="激活前确认"
                     onChange={next => void setFlag('requireApproval', next)}
                   />
                   <SettingRow
                     checked={autoGroupMcp}
                     description="把同一 MCP 服务的工具（mcp__server__tool）聚成一个条目，模型一次激活整个服务；关闭后每个工具各自激活。"
-                    disabled={busy}
+                    disabled={readOnly}
                     label="按 MCP 服务分组"
                     onChange={next => void setFlag('autoGroupMcp', next)}
                   />
@@ -280,9 +317,9 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                 <h4 className={CLASSES.sectionTitle}>工具分组</h4>
                 <p className={CLASSES.help}>一组工具共用一个标识符，模型激活该标识符即可一次拿到整组；留空则每个工具各自成为一个条目。</p>
                 <GroupsEditor
-                  disabled={busy}
+                  disabled={readOnly}
                   groups={groupsForEditor}
-                  onChange={next => void applyGroups(next)}
+                  onChange={applyGroups}
                   toolNames={(catalog.entries ?? []).flatMap(entry => entry.tools)}
                 />
               </section>

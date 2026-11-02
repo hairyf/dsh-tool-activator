@@ -1,9 +1,7 @@
 import type { ReactElement } from 'react'
 import type { GroupsEditorProps, ToolGroupDraft } from './types'
-import { CLASSES } from './constants'
+import { CLASSES, GROUP_IDENTIFIER_PATTERN } from './constants'
 import { ToolActivatorButton, ToolActivatorCheckbox, ToolActivatorInput } from './primitives'
-
-const IDENTIFIER_PATTERN = /^[\w.-]+$/u
 
 function emptyGroup(): ToolGroupDraft {
   return { identifier: '', name: '', description: '', tools: [], sections: [] }
@@ -35,7 +33,7 @@ export function GroupsEditor({ disabled, groups, toolNames, onChange }: GroupsEd
     <div className={CLASSES.groups}>
       {groups.map((group, index) => {
         const position = index + 1
-        const invalid = group.identifier === '' || !IDENTIFIER_PATTERN.test(group.identifier)
+        const invalid = group.identifier === '' || !GROUP_IDENTIFIER_PATTERN.test(group.identifier)
         const duplicate = !invalid && duplicates.has(index)
         return (
           // eslint-disable-next-line react/no-array-index-key -- a draft group has no identity until the host saves it
