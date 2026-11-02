@@ -58,7 +58,7 @@ afterAll(() => {
 })
 
 const scope: ConfigurationScope = {
-  getSnapshot: () => ({ mode: 'host', revision: 1, status: 'ready', value: {}, writable: true }),
+  getSnapshot: () => ({ revision: 1, status: 'ready', value: {}, writable: true }),
   mutate: vi.fn(async () => true),
   subscribe: () => () => {},
 }

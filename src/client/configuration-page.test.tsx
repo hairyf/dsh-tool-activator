@@ -23,7 +23,6 @@ const CATALOG: ActivationCatalog = {
 
 function scopeOf(value: Record<string, unknown>, overrides: Partial<ConfigurationScopeSnapshot> = {}): ConfigurationScope {
   const snapshot: ConfigurationScopeSnapshot = {
-    mode: 'host',
     revision: 3,
     status: 'ready',
     value,
@@ -195,6 +194,23 @@ describe('tool configuration page', () => {
 
     await waitFor(() => expect(scope.mutate).toHaveBeenCalledTimes(1))
     expect(scope.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['basicTools'], value: ['read'] }], 3)
+  })
+
+  it('writes through a platform snapshot that carries no mode field', async () => {
+    // Newer platform snapshots dropped `mode`; guarding on it silently refused
+    // every write (issue #2).
+    const scope = scopeOf({ basicTools: ['read'] })
+    expect('mode' in scope.getSnapshot()).toBe(false)
+    renderPage(scope)
+
+    const mail = await screen.findByRole('switch', { name: '默认加载 mail' })
+    mail.click()
+
+    await waitFor(() => expect(scope.mutate).toHaveBeenCalledWith(
+      [{ op: 'set', path: ['basicTools'], value: ['read', 'mcp__mail__send', 'mcp__mail__list'] }],
+      3,
+    ))
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('refuses to write when the host document is not writable', async () => {

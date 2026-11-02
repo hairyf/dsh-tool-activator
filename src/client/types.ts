@@ -7,8 +7,11 @@ export interface ConfigurationOp {
   value: unknown
 }
 
+/**
+ * Only the fields this page reads. Newer platform snapshots drop `mode`, so
+ * `writable` alone decides whether the Host document accepts the write.
+ */
 export interface ConfigurationScopeSnapshot {
-  mode: 'host' | 'memory'
   revision: number | undefined
   status: 'loading' | 'ready' | 'unavailable'
   value: Record<string, unknown> | undefined

@@ -125,7 +125,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
   /** One write path for every control on the page: optimistic, then verified. */
   const write = useCallback(async (field: string, value: unknown, revert: () => void): Promise<boolean> => {
     const snapshot = configScope.getSnapshot()
-    if (snapshot.status !== 'ready' || !snapshot.writable || snapshot.mode !== 'host') {
+    if (snapshot.status !== 'ready' || !snapshot.writable) {
       setFailure('当前配置不可写，无法保存。')
       return false
     }
