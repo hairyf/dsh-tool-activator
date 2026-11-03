@@ -158,7 +158,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
       return
     const policy = policySnapshot()
     const catalog = catalogOf(agent, policy)
-    applyHiding(agent, catalog, enabledToolNames(catalog, policy, historyOf(agent).activatedToolIds))
+    applyHiding(agent, catalog, enabledToolNames(catalog, policy, activatedIdsOf(agent)))
   })
   let approval: Context['approval'] | undefined
   let skills: Context['skills'] | undefined
@@ -281,7 +281,10 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     const policy = policySnapshot()
     hiding.suspend(agent)
     const catalog = catalogOf(agent, policy)
-    applyHiding(agent, catalog, enabledToolNames(catalog, policy, []))
+    // A restored session's agent is new, but its session already carries the tools
+    // it activated: the gate must keep them visible, or the first request after a
+    // restart would drop tools the model had already been given.
+    applyHiding(agent, catalog, enabledToolNames(catalog, policy, activatedIdsOf(agent)))
   })
   ctx.on('agent/disposed', ({ agent }) => {
     hiding.forget(agent)
@@ -398,6 +401,20 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     if (!history)
       throw new Error('dsh-tool-activator activation projection is unavailable')
     return history
+  }
+
+  /**
+   * The tools this session already activated. An empty list is the safe answer: the
+   * gate then hides what was never activated, and the next assembly widens it from
+   * the recovered history.
+   */
+  function activatedIdsOf(agent: Agent): readonly string[] {
+    try {
+      return historyOf(agent).activatedToolIds
+    }
+    catch {
+      return []
+    }
   }
 
   function catalogOf(agent: Agent, policy: ToolPolicy): ToolCatalogItem[] {

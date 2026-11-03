@@ -891,6 +891,22 @@ describe('the 0.2.2 contract: the waterfall carries no tool declarations', () =>
     return `${renderPrompt(assembly)}\n${renderContextSnapshot(assembly)}`
   }
 
+  it('keeps the restored activations visible on the very first read of a restored session', async () => {
+    const { ctx, makeAgent } = await fixture({ withoutDeclarations: true })
+    // The host contract is learned from the first scoped assembly; in production
+    // the load-time probe already knows it.
+    const { agent: probe } = await makeAgent('contract-probe')
+    await ctx.systemPrompt.assemble({ scope: probe, agent: probe })
+    const original = await makeAgent('source-session')
+    await call(ctx, original.agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
+    closeTurn(original.agent.session)
+    const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
+    const restored = await makeAgent('restored-session', serialized)
+    // The first request after a restart resolves its tool set before anything
+    // else: the tools the session already activated must still be declared.
+    expect(ctx.tools.schemas(restored.agent).map(schema => schema.name)).toContain(DISCOVERABLE_TOOL)
+  })
+
   it('keeps the discoverable directory whole in the first prompt of a new session', async () => {
     const { ctx, makeAgent } = await fixture({ withoutDeclarations: true })
     const { agent } = await makeAgent('new-session')
