@@ -41,4 +41,12 @@ export const CLASSES = {
   choices: 'dsh-tool-activator-choices',
   choice: 'dsh-tool-activator-choice',
   toolbar: 'dsh-tool-activator-toolbar',
+  collapsible: 'dsh-tool-activator-collapsible',
+  collapsibleHeader: 'dsh-tool-activator-collapsible-header',
+  collapsibleToggle: 'dsh-tool-activator-collapsible-toggle',
+  collapsibleLabel: 'dsh-tool-activator-collapsible-label',
+  collapsibleChevron: 'dsh-tool-activator-collapsible-chevron',
+  collapsibleActions: 'dsh-tool-activator-collapsible-actions',
+  collapsibleBody: 'dsh-tool-activator-collapsible-body',
+  groupFilter: 'dsh-tool-activator-group-filter',
 } as const
