@@ -147,6 +147,19 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     .then(async () => ctx.systemPrompt.assemble({}))
     .catch(() => { })
     .finally(() => probe())
+  // A step resolves its tool set BEFORE it assembles, so an agent that already
+  // existed when this plugin loaded (a restored session) would spend its first
+  // step with every tool declared — the assembly hook then hides them, which is
+  // the one-step-late "tools added, then removed" flicker. Answering inside
+  // `tools.view()` instead makes the first read correct no matter who created
+  // the agent or when this plugin loaded.
+  hiding.setGateResolver((agent) => {
+    if (declarationsOwned === true)
+      return
+    const policy = policySnapshot()
+    const catalog = catalogOf(agent, policy)
+    applyHiding(agent, catalog, enabledToolNames(catalog, policy, historyOf(agent).activatedToolIds))
+  })
   let approval: Context['approval'] | undefined
   let skills: Context['skills'] | undefined
   ctx.inject(['approval'], (owner) => {

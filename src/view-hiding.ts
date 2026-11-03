@@ -20,6 +20,22 @@ interface ViewHook {
   origView: (scope?: unknown) => FilteredView
   /** Names this scope may see; absent means "filter nothing". Read on every call. */
   gateFor?: (scope: unknown) => ReadonlySet<string> | undefined
+  /**
+   * Installs a gate for a scope that has none yet. Called from inside `view()`,
+   * because a step resolves its tool set BEFORE it assembles: an agent that
+   * already existed when this plugin loaded (a restored session) never sees
+   * `agent/created`, and waiting for the assembly hook costs it one whole step
+   * of every tool being declared.
+   */
+  resolveGate?: (agent: Agent) => void
+  /** Guards the resolver against the catalog read it performs itself. */
+  resolving?: WeakSet<object>
+  /**
+   * Scopes whose current read must not resolve a gate. A catalog read has to
+   * see every tool: a gate resolved DURING that read would filter the very
+   * directory the plugin offers, and the model would find no tool to activate.
+   */
+  suppressed?: WeakSet<object>
   wrapped?: (scope?: unknown) => FilteredView
 }
 
@@ -43,6 +59,8 @@ export interface ViewHiding {
    */
   transparent: <T>(agent: Agent, read: () => T) => T
   setGate: (agent: Agent, allowed: ReadonlySet<string>) => void
+  /** Install the gate resolver: it runs on the first read of a gate-less scope. */
+  setGateResolver: (resolve: (agent: Agent) => void) => void
   /** Stop filtering one agent, so a catalog read sees every tool again. */
   suspend: (agent: Agent) => void
   /** Forget one agent. */
@@ -82,16 +100,26 @@ export function installViewHiding(tools: unknown): ViewHiding | undefined {
     setGate(agent, allowed) {
       gates.set(agent, new Set(allowed))
     },
+    setGateResolver(resolve) {
+      hook.resolveGate = resolve
+    },
     suspend(agent) {
       gates.delete(agent)
     },
     transparent(agent, read) {
       const previous = gates.get(agent)
       gates.delete(agent)
+      // A catalog read must not resolve a gate either: the resolver would read
+      // the catalog itself and install an allow-list, and the read that follows
+      // would be filtered by it — the directory would come back without the
+      // tools it is supposed to offer.
+      const suppressed = hook.suppressed ??= new WeakSet()
+      suppressed.add(agent as unknown as object)
       try {
         return read()
       }
       finally {
+        suppressed.delete(agent as unknown as object)
         if (previous !== undefined)
           gates.set(agent, previous)
       }
@@ -113,7 +141,8 @@ function ensureHook(owner: ToolsHost): ViewHook | undefined {
     return undefined
 
   const hook: ViewHook = { bypass: 0, descriptor, origView }
-  // The wrapper copies the visible map before editing it: the host hands the same
+  hook.resolving = new WeakSet()
+  hook.suppressed = new WeakSet()
   // service-wide map to every caller, so mutating it in place would leak into scopes
   // this plugin does not own.
   hook.wrapped = function (this: unknown, scope?: unknown): FilteredView {
@@ -127,7 +156,26 @@ function ensureHook(owner: ToolsHost): ViewHook | undefined {
     const copy: FilteredView = { ...original, visible: new Map(original.visible) }
     if (hook.bypass > 0)
       return copy
-    const allowed = hook.gateFor?.(scope)
+    let allowed = hook.gateFor?.(scope)
+    if (allowed === undefined && hook.resolveGate !== undefined && scope instanceof Object
+      && !(hook.suppressed?.has(scope) ?? false)) {
+      // Resolve at most once per scope at a time: the resolver reads the catalog,
+      // and that read comes back through this same wrapper.
+      const resolving = hook.resolving ??= new WeakSet()
+      if (!resolving.has(scope)) {
+        resolving.add(scope)
+        try {
+          hook.resolveGate(scope as Agent)
+        }
+        catch {
+          // Leave the view untouched; the assembly hook still installs the gate.
+        }
+        finally {
+          resolving.delete(scope)
+        }
+        allowed = hook.gateFor?.(scope)
+      }
+    }
     if (allowed !== undefined) {
       // Walk a copy of the keys: a gate that grows while we iterate (a dynamic
       // allow-list) would otherwise skip names.

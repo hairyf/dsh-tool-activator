@@ -67,6 +67,10 @@ interface FixtureOptions {
   skills?: boolean
   runtimeContext?: boolean
   spill?: boolean
+  /** Emulate dsh 0.2.2: the waterfall carries no tool declarations. */
+  withoutDeclarations?: boolean
+  /** Create the agent BEFORE the plugin loads, the way a restored session does. */
+  restoredAgent?: boolean
 }
 
 interface Driver {
@@ -80,6 +84,8 @@ interface Fixture {
   fiber: Fiber
   ptc: IntegrationPtcRuntime | undefined
   makeAgent: (id: string, seed?: readonly SessionEvent[]) => Promise<Driver>
+  /** The agent that predates the plugin load, when the fixture created one. */
+  restored: Driver | undefined
   setPolicy: (changes: Partial<ToolPolicy>) => void
 }
 
@@ -130,29 +136,6 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
       return [{ type: 'text', text: 'Spilled to a result locator' }]
     }))
   }
-  const fiber = await ctx.plugin({
-    name: plugin.name,
-    inject: plugin.inject,
-    apply(owner: Context): void {
-      plugin.apply(owner, config)
-    },
-  })
-  services.push(fiber)
-  for (const name of ['read', 'write', 'glob', 'grep', DISCOVERABLE_TOOL, 'web_search']) {
-    cleanups.push(ctx.tools.register(defineTool({
-      name,
-      description: `${name} description`,
-      parameters: { path: { type: 'string', required: true } },
-      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
-      execute: async args => `${name}:${args.path}`,
-    })))
-  }
-  for (const name of ['read', 'write'])
-    cleanups.push(ctx.systemPrompt.section({ name: `tool:${name}`, order: 100, text: `${name.toUpperCase()} FULL GUIDE` }))
-  cleanups.push(ctx.systemPrompt.section({ name: `tool:${DISCOVERABLE_TOOL}`, order: 100, text: DISCOVERABLE_GUIDE }))
-  cleanups.push(ctx.systemPrompt.section({ name: 'tool:web_search', order: 100, text: 'WEB SEARCH FULL GUIDE' }))
-  cleanups.push(ctx.systemPrompt.section({ name: 'host:safety', order: 1, text: 'HOST SAFETY NEVER REMOVED' }))
-  cleanups.push(ctx.systemPrompt.context({ name: 'host:runtime', order: 1, text: 'HOST RUNTIME NEVER REMOVED' }))
   let turn = 0
   const makeAgent = async (id: string, seed: readonly SessionEvent[] = []): Promise<Driver> => {
     const session = ctx.sessions.create(SessionId(id), { ...(seed.length === 0 ? {} : { seed }), meta: { cwd: FIXTURE_CWD } })
@@ -189,11 +172,49 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     session.append('step/start', { turn, step: 1 })
     return { agent, events, close }
   }
+  // A restored session's agent exists before the plugin loads, so it never sees
+  // `agent/created`: the case the lazy gate resolver exists for.
+  const restored = options.restoredAgent ? await makeAgent('restored') : undefined
+  const fiber = await ctx.plugin({
+    name: plugin.name,
+    inject: plugin.inject,
+    apply(owner: Context): void {
+      plugin.apply(owner, config)
+    },
+  })
+  services.push(fiber)
+  if (options.withoutDeclarations) {
+    // dsh 0.2.2 hands the waterfall a presentation WITHOUT tool declarations and
+    // merges the provider-owned schemas afterwards. Deleting the declarations in
+    // place emulates that contract for the rc.2 fixture. The hook has to run
+    // BEFORE the plugin's own probe — that probe reads the declarations off the
+    // payload to learn whether the host owns them — hence `prepend`.
+    cleanups.push(ctx.on('system-prompt/assemble', async (assembly, _context, next) => {
+      Reflect.deleteProperty(assembly, 'tools')
+      return next()
+    }, { prepend: true }))
+  }
+  for (const name of ['read', 'write', 'glob', 'grep', DISCOVERABLE_TOOL, 'web_search']) {
+    cleanups.push(ctx.tools.register(defineTool({
+      name,
+      description: `${name} description`,
+      parameters: { path: { type: 'string', required: true } },
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      execute: async args => `${name}:${args.path}`,
+    })))
+  }
+  for (const name of ['read', 'write'])
+    cleanups.push(ctx.systemPrompt.section({ name: `tool:${name}`, order: 100, text: `${name.toUpperCase()} FULL GUIDE` }))
+  cleanups.push(ctx.systemPrompt.section({ name: `tool:${DISCOVERABLE_TOOL}`, order: 100, text: DISCOVERABLE_GUIDE }))
+  cleanups.push(ctx.systemPrompt.section({ name: 'tool:web_search', order: 100, text: 'WEB SEARCH FULL GUIDE' }))
+  cleanups.push(ctx.systemPrompt.section({ name: 'host:safety', order: 1, text: 'HOST SAFETY NEVER REMOVED' }))
+  cleanups.push(ctx.systemPrompt.context({ name: 'host:runtime', order: 1, text: 'HOST RUNTIME NEVER REMOVED' }))
   return {
     ctx,
     fiber,
     get ptc(): IntegrationPtcRuntime | undefined { return ptc },
     makeAgent,
+    restored,
     setPolicy(changes): void {
       current = Config(JSON.parse(JSON.stringify({ ...current, ...changes }))).get()
     },
@@ -855,5 +876,41 @@ describe('activating a tool refreshes the declaration list for the next inferenc
     await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
     expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
     expect(events.filter(event => event.type === 'developer/message')).toHaveLength(0)
+  })
+})
+
+/**
+ * dsh 0.2.2 hands the waterfall a presentation WITHOUT tool declarations and
+ * merges the provider-owned schemas afterwards, so the plugin hides through the
+ * view gate instead of rewriting the assembly. The rc.2 fixture still owns the
+ * declarations, so this block emulates the newer contract instead.
+ */
+describe('the 0.2.2 contract: the waterfall carries no tool declarations', () => {
+  async function promptText(ctx: Context, agent: Agent): Promise<string> {
+    const assembly = await ctx.systemPrompt.assemble({ scope: agent, agent })
+    return `${renderPrompt(assembly)}\n${renderContextSnapshot(assembly)}`
+  }
+
+  it('keeps the discoverable directory whole in the first prompt of a new session', async () => {
+    const { ctx, makeAgent } = await fixture({ withoutDeclarations: true })
+    const { agent } = await makeAgent('new-session')
+
+    const text = await promptText(ctx, agent)
+    // The directory is what makes `activate_tools` usable at all: the model has to
+    // see which tools exist before it can ask for them.
+    expect(text).toContain('<available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">')
+    expect(text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" name="${DISCOVERABLE_TOOL}">`)
+  })
+
+  it('hides the un-activated tools on the first read of a restored agent', async () => {
+    const { ctx, makeAgent, restored } = await fixture({ withoutDeclarations: true, restoredAgent: true })
+    // The host contract is learned from the first scoped assembly; in production
+    // the load-time probe already knows it.
+    const { agent: probe } = await makeAgent('contract-probe')
+    await ctx.systemPrompt.assemble({ scope: probe, agent: probe })
+    // A step resolves its tool set before it assembles, so this read is the one
+    // that has to be filtered: the agent predates the plugin, so it never saw
+    // `agent/created`.
+    expect(ctx.tools.schemas(restored!.agent).map(schema => schema.name)).not.toContain(DISCOVERABLE_TOOL)
   })
 })

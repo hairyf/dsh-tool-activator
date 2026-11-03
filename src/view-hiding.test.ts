@@ -1,5 +1,5 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { installViewHiding } from './view-hiding'
 
 interface FakeView {
@@ -87,6 +87,24 @@ describe('installViewHiding', () => {
     expect([...tools.view(owner).visible.keys()]).toEqual(['read'])
   })
 
+  it('keeps a catalog read whole and resolves no gate during it', () => {
+    const tools = new FakeTools()
+    const hiding = installViewHiding(tools)!
+    const owner = agent('catalog')
+    const resolve = vi.fn((scope: Agent) => {
+      // The resolver reads the catalog itself, exactly like the plugin's does.
+      hiding.transparent(scope, () => [...tools.view(scope).visible.keys()])
+      hiding.setGate(scope, new Set(['read']))
+    })
+    hiding.setGateResolver(resolve)
+
+    // A gate resolved during a catalog read would filter the very directory the
+    // plugin offers: the model would find nothing left to activate.
+    const visible = [...hiding.transparent(owner, () => [...tools.view(owner).visible.keys()])]
+    expect(visible).toEqual(['read', 'bash', 'ast_grep', 'write'])
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
   it('suspends and forgets per agent', () => {
     const tools = new FakeTools()
     const hiding = installViewHiding(tools)
@@ -124,5 +142,32 @@ describe('installViewHiding', () => {
 
     expect(installViewHiding(tools)).toBeDefined()
     expect(tools.view()).toEqual({ tools: ['read'] })
+  })
+
+  it('resolves a missing gate on the very first read, before any assembly', () => {
+    const tools = new FakeTools()
+    const hiding = installViewHiding(tools)!
+    const owner = agent('restored')
+    const resolve = vi.fn(() => {
+      hiding.setGate(owner, new Set(['read']))
+    })
+    hiding.setGateResolver(resolve)
+
+    // A step resolves its tool set before it assembles, so the gate has to exist
+    // on this first read — not after an assembly that would install it.
+    expect([...tools.view(owner).visible.keys()]).toEqual(['read'])
+    expect(resolve).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops resolving once a gate exists', () => {
+    const tools = new FakeTools()
+    const hiding = installViewHiding(tools)!
+    const owner = agent('settled')
+    const resolve = vi.fn()
+    hiding.setGateResolver(resolve)
+    hiding.setGate(owner, new Set(['read', 'write']))
+
+    expect([...tools.view(owner).visible.keys()]).toEqual(['read', 'write'])
+    expect(resolve).not.toHaveBeenCalled()
   })
 })

@@ -31,6 +31,12 @@ export interface ToolHiding {
   readAll: <T>(agent: Agent, read: () => T) => T
   /** Drop the installed restriction so the next catalog read sees every tool. */
   suspend: (agent: Agent) => void
+  /**
+   * Install the gate resolver. It exists because a step resolves its tool set
+   * before the assembly hook runs, so an agent that predates this load would
+   * otherwise declare every tool on its first step.
+   */
+  setGateResolver: (resolve: (agent: Agent) => void) => void
 }
 
 /** What one sync did, so the caller can report it without a logger. */
@@ -140,6 +146,9 @@ export function createToolHiding(ctx: Context): ToolHiding {
         console.warn(`[dsh-tool-activator] cannot hide inactive tools with a scoped restriction: ${applied.error ?? 'unknown error'}`)
       }
       return { deny: applied.deny, total: names.length, installed: false, error: applied.error }
+    },
+    setGateResolver(resolve) {
+      viewHiding?.setGateResolver(resolve)
     },
     readAll(agent, read) {
       if (viewHiding !== undefined)
