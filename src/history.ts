@@ -1,11 +1,21 @@
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-tools'
-import type {} from '@deepseek-ai/dsh-user-approval'
+import type { } from '@deepseek-ai/dsh-tools'
+import type { } from '@deepseek-ai/dsh-user-approval'
 import type { ActivationEnvelope, ActivationHistory, ActivationReceipt } from './types'
 import { z } from 'zod'
 import { receiptFromContent } from './activation'
-import { ACTIVATOR_TOOL_NAME } from './constants'
+import { ACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME } from './constants'
 
+/**
+ * The shape of a grouping result that may carry the names a rename or a removal
+ * would drop from the activation account. Anything else is not a grouping result
+ * and carries no names.
+ */
+const groupingResultSchema = z.object({
+  action: z.enum(['list', 'apply']),
+  migrated: z.array(z.string()).optional(),
+})
 const requestSchema = z.object({ identifiers: z.array(z.string()), reason: z.string() })
 
 export function emptyActivationHistory(): ActivationHistory {
@@ -16,15 +26,30 @@ export function mergeActivation(state: ActivationHistory, result: ActivationEnve
   if (!result.success)
     return state
   const identifiers = new Set(state.activatedToolIds)
-  result.state.activatedTools.forEach(tool => identifiers.add(tool.identifier))
+  const names = new Set(state.activatedToolNames ?? [])
+  for (const tool of result.state.activatedTools) {
+    identifiers.add(tool.identifier)
+    // The names are folded next to the identifiers because they are what survives
+    // a renamed or split group; the identifiers alone would die with the group.
+    for (const name of tool.tools ?? [])
+      names.add(name)
+  }
   const skills = new Map(state.activatedSkills.map(skill => [skill.id, skill]))
   for (const skill of result.state.activatedSkills) {
     skills.delete(skill.id)
     skills.set(skill.id, skill)
   }
-  if (identifiers.size === state.activatedToolIds.length && result.state.activatedSkills.length === 0)
+  if (identifiers.size === state.activatedToolIds.length
+    && names.size === (state.activatedToolNames?.length ?? 0)
+    && result.state.activatedSkills.length === 0) {
     return state
-  return { ...state, activatedToolIds: [...identifiers], activatedSkills: [...skills.values()] }
+  }
+  return {
+    ...state,
+    activatedToolIds: [...identifiers],
+    ...(names.size > 0 ? { activatedToolNames: [...names] } : {}),
+    activatedSkills: [...skills.values()],
+  }
 }
 
 function parseRequest(value: unknown): string[] | undefined {
@@ -35,6 +60,25 @@ function parseRequest(value: unknown): string[] | undefined {
   catch {
     return undefined
   }
+}
+
+/**
+ * The tool names a grouping result carried over into the session account. The
+ * result is the only place that knows which members a renamed or removed group
+ * carried, so the names travel with it and are folded in here.
+ */
+function migratedFromContent(content: readonly ContentBlock[]): string[] {
+  for (const block of content) {
+    if (block.type !== 'text')
+      continue
+    try {
+      const parsed = groupingResultSchema.safeParse(JSON.parse(block.text))
+      if (parsed.success && parsed.data.migrated)
+        return parsed.data.migrated
+    }
+    catch { }
+  }
+  return []
 }
 
 function validReceipt(state: ActivationHistory, receipt: ActivationReceipt, callId: string, identifiers: readonly string[]): boolean {
@@ -54,6 +98,15 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
       ...state,
       pendingCalls: [...new Set([...state.pendingCalls, event.data.callId])],
       pendingRequests: [...(state.pendingRequests ?? []).filter(item => item.callId !== event.data.callId), { callId: event.data.callId, identifiers }],
+    }
+  }
+
+  if (event.type === 'tool/call' && event.data.name === GROUPING_TOOL_NAME) {
+    // A grouping result carries no tool name of its own, so the call is the only
+    // thing that tells the result apart from any other tool result.
+    return {
+      ...state,
+      pendingGroupingCalls: [...new Set([...(state.pendingGroupingCalls ?? []), event.data.callId])],
     }
   }
 
@@ -84,7 +137,8 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
     const { message } = event.data
     const pending = (state.pendingActivations ?? []).filter(item => item.parentCallId === message.toolCallId)
     const request = (state.pendingRequests ?? []).find(item => item.callId === message.toolCallId)
-    if (!request && pending.length === 0)
+    const grouping = (state.pendingGroupingCalls ?? []).includes(message.toolCallId)
+    if (!request && pending.length === 0 && !grouping)
       return state
     let next: ActivationHistory = {
       ...state,
@@ -92,6 +146,7 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
       ...(state.pendingRequests ? { pendingRequests: state.pendingRequests.filter(item => item.callId !== message.toolCallId) } : {}),
       ...(state.pendingActivations ? { pendingActivations: state.pendingActivations.filter(item => item.parentCallId !== message.toolCallId) } : {}),
       ...(state.approvedCalls ? { approvedCalls: state.approvedCalls.filter(id => id !== message.toolCallId) } : {}),
+      ...(state.pendingGroupingCalls ? { pendingGroupingCalls: state.pendingGroupingCalls.filter(id => id !== message.toolCallId) } : {}),
     }
     if (message.isError)
       return next
@@ -101,6 +156,17 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
       const receipt = receiptFromContent(message.content)
       if (receipt && validReceipt(state, receipt, message.toolCallId, request.identifiers))
         next = mergeActivation(next, receipt)
+    }
+    if (grouping) {
+      // The names of the members a renamed or removed group carried join the
+      // account of the session: they are what keeps those tools callable.
+      const migrated = migratedFromContent(message.content)
+      if (migrated.length > 0) {
+        const names = new Set(next.activatedToolNames ?? [])
+        for (const name of migrated)
+          names.add(name)
+        next = { ...next, activatedToolNames: [...names] }
+      }
     }
     return next
   }
@@ -126,6 +192,7 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
       || (state.pendingActivations?.length ?? 0) > 0
       || (state.approvalRequests?.length ?? 0) > 0
       || (state.approvedCalls?.length ?? 0) > 0
+      || (state.pendingGroupingCalls?.length ?? 0) > 0
     if (hasPending) {
       return {
         ...state,
@@ -134,6 +201,7 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
         ...(state.pendingActivations ? { pendingActivations: [] } : {}),
         ...(state.approvalRequests ? { approvalRequests: [] } : {}),
         ...(state.approvedCalls ? { approvedCalls: [] } : {}),
+        ...(state.pendingGroupingCalls ? { pendingGroupingCalls: [] } : {}),
       }
     }
   }

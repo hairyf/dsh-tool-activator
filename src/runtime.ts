@@ -20,11 +20,11 @@ export class ActivatorExecutionRuntime {
     }
 
     try {
-      const alreadyActive = this.service.getActivatedToolIds()
+      const activeIdentifiers = new Set(this.service.getActiveIdentifiers(identifiers))
       const toActivate: string[] = []
       const alreadyActiveList: string[] = []
       for (const id of identifiers) {
-        if (alreadyActive.includes(id))
+        if (activeIdentifiers.has(id))
           alreadyActiveList.push(id)
         else
           toActivate.push(id)
@@ -59,6 +59,9 @@ export class ActivatorExecutionRuntime {
         avatar: manifest.avatar,
         identifier: manifest.identifier,
         name: manifest.name,
+        // The names travel with the receipt: they are what keeps the tools
+        // callable after the group that carried them is renamed or split.
+        tools: manifest.tools.map(tool => tool.name),
       }))
       if (manifests.length > 0)
         this.service.markActivated(manifests.map(manifest => manifest.identifier))

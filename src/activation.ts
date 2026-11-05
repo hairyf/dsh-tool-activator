@@ -25,6 +25,7 @@ export const activationEnvelopeSchema = z.object({
       avatar: z.string().optional(),
       identifier: z.string(),
       name: z.string(),
+      tools: z.array(z.string()).optional(),
     })),
     activatedSkills: z.array(activatedSkillSchema),
     alreadyActive: z.array(z.string()),
@@ -48,12 +49,14 @@ export const activationReceiptSchema = activationEnvelopeSchema.extend({
 
 export const activationHistorySchema = z.object({
   activatedToolIds: z.array(z.string()),
+  activatedToolNames: z.array(z.string()).optional(),
   activatedSkills: z.array(activatedSkillSchema),
   pendingCalls: z.array(z.string()),
   pendingActivations: z.array(z.object({ callId: z.string(), parentCallId: z.string(), activation: activationReceiptSchema })).optional(),
   pendingRequests: z.array(z.object({ callId: z.string(), identifiers: z.array(z.string()) })).optional(),
   approvalRequests: z.array(z.object({ id: z.string(), callId: z.string() })).optional(),
   approvedCalls: z.array(z.string()).optional(),
+  pendingGroupingCalls: z.array(z.string()).optional(),
 }) satisfies z.ZodType<ActivationHistory>
 
 function sanitizeEnvelope(value: ActivationEnvelope): ActivationEnvelope {
@@ -61,7 +64,11 @@ function sanitizeEnvelope(value: ActivationEnvelope): ActivationEnvelope {
     ...value,
     state: {
       ...value.state,
-      activatedTools: value.state.activatedTools.map(({ avatar, ...tool }) => avatar === undefined ? tool : { ...tool, avatar }),
+      activatedTools: value.state.activatedTools.map(({ avatar, tools, ...tool }) => ({
+        ...tool,
+        ...(avatar === undefined ? {} : { avatar }),
+        ...(tools === undefined ? {} : { tools }),
+      })),
       activatedSkills: value.state.activatedSkills.map(({ provider, instructions, ...skill }) => ({
         ...skill,
         ...(provider === undefined ? {} : { provider }),

@@ -1,11 +1,15 @@
 import type { ReactElement } from 'react'
 import type { ActivationCatalog, ActivationCatalogEntry } from '../types'
-import type { ConfigurationScope, ToolActivatorConfigurationProps, ToolGroupDraft } from './types'
+import type { ConfigurationDraft, ConfigurationOp, ConfigurationScope, ToolActivatorConfigurationProps, ToolGroupDraft, ToolGroupShape } from './types'
+import type { SerialWriteQueue, WriteField } from './write-queue'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ACTIVATOR_TOOL_NAME } from '../constants'
-import { CLASSES } from './constants'
+import { ACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME } from '../constants'
+import { Collapsible } from './collapsible'
+import { CLASSES, GROUPS_WRITE_DELAY_MS } from './constants'
+import { groupsSavable } from './groups'
 import { GroupsEditor } from './groups-editor'
 import { ToolActivatorSwitch, ToolActivatorTag, ToolActivatorTooltip } from './primitives'
+import { createSerialWriteQueue } from './write-queue'
 
 interface SettingRowProps {
   checked: boolean
@@ -61,6 +65,56 @@ function readGroups(scope: ConfigurationScope): ToolGroupDraft[] | undefined {
   })
 }
 
+/** Stable identity of the host's groups: a change means somebody else wrote the document. */
+function groupsSignature(scope: ConfigurationScope): string {
+  return JSON.stringify(readGroups(scope) ?? [])
+}
+
+/** Groups are copied out of the draft before they reach the Host or a render. */
+function cloneGroup(group: ToolGroupShape): ToolGroupDraft {
+  return {
+    identifier: group.identifier,
+    name: group.name,
+    description: group.description,
+    tools: [...group.tools],
+    sections: [...group.sections],
+  }
+}
+
+/** The draft the page edits, seeded from the Host document it belongs to. */
+function readDraft(scope: ConfigurationScope): ConfigurationDraft {
+  return {
+    basicTools: readList(scope, 'basicTools') ?? [],
+    requireApproval: readFlag(scope, 'requireApproval'),
+    autoGroupMcp: readFlag(scope, 'autoGroupMcp'),
+    groups: readGroups(scope),
+  }
+}
+
+/** The ops for the drained fields, built from the newest draft at send time. */
+function draftOps(draft: ConfigurationDraft, fields: readonly WriteField[]): ConfigurationOp[] {
+  const ops: ConfigurationOp[] = []
+  for (const field of fields) {
+    if (field === 'basicTools') {
+      ops.push({ op: 'set', path: ['basicTools'], value: [...draft.basicTools] })
+      continue
+    }
+    if (field === 'requireApproval' && draft.requireApproval !== undefined) {
+      ops.push({ op: 'set', path: ['requireApproval'], value: draft.requireApproval })
+      continue
+    }
+    if (field === 'autoGroupMcp' && draft.autoGroupMcp !== undefined) {
+      ops.push({ op: 'set', path: ['autoGroupMcp'], value: draft.autoGroupMcp })
+      continue
+    }
+    // An unsavable group draft stays local: writing it would only bounce off
+    // the Host schema and roll the whole page back to the saved document.
+    if (field === 'groups' && draft.groups !== undefined && groupsSavable(draft.groups))
+      ops.push({ op: 'set', path: ['groups'], value: draft.groups.map(cloneGroup) })
+  }
+  return ops
+}
+
 function isDefaultLoaded(entry: ActivationCatalogEntry, basicTools: readonly string[]): boolean {
   return entry.tools.length > 0 && entry.tools.every(tool => basicTools.includes(tool))
 }
@@ -70,17 +124,32 @@ function isBaseTool(entry: ActivationCatalogEntry, baseTools: readonly string[])
   return baseTools.length > 0 && entry.tools.length > 0 && entry.tools.every(tool => baseTools.includes(tool))
 }
 
+/** A read-only or unavailable document accepts no writes, so the controls lock. */
+function isReadOnly(scope: ConfigurationScope): boolean {
+  const snapshot = scope.getSnapshot()
+  return snapshot.status !== 'ready' || !snapshot.writable
+}
+
 export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog }: ToolActivatorConfigurationProps): ReactElement | null {
-  const [basicTools, setBasicTools] = useState<string[]>(() => readList(configScope, 'basicTools') ?? [])
-  const [flags, setFlags] = useState(() => ({
-    requireApproval: readFlag(configScope, 'requireApproval'),
-    autoGroupMcp: readFlag(configScope, 'autoGroupMcp'),
-  }))
-  const [groups, setGroups] = useState<ToolGroupDraft[] | undefined>(() => readGroups(configScope))
+  const [draft, setDraft] = useState<ConfigurationDraft>(() => readDraft(configScope))
   const [catalog, setCatalog] = useState<ActivationCatalog | undefined>(undefined)
   const [failure, setFailure] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [readOnly, setReadOnly] = useState(() => isReadOnly(configScope))
+  // Folding is a view preference for this visit: both lists start folded and
+  // nothing about it reaches the configuration draft.
+  const [openLists, setOpenLists] = useState({ active: false, pending: false })
+  // The draft leads the Host document between a click and the echo of its own
+  // write, so the handlers read it through a ref: two clicks in the same tick
+  // both see the first one.
+  const draftRef = useRef(draft)
   const aliveRef = useRef(true)
+  const groupsTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pendingGroupsRef = useRef<ToolGroupDraft[] | undefined>(undefined)
+  // The groups this page last adopted from the host. A different signature on the
+  // next notification means the grouping was changed behind the page — by the
+  // model through the grouping tool, or by another window — and the catalog then
+  // shows entries the document no longer has.
+  const adoptedGroupsRef = useRef(groupsSignature(configScope))
 
   useEffect(() => {
     aliveRef.current = true
@@ -89,17 +158,95 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     }
   }, [])
 
+  const updateDraft = useCallback((change: (prev: ConfigurationDraft) => ConfigurationDraft): void => {
+    const next = change(draftRef.current)
+    draftRef.current = next
+    setDraft(next)
+  }, [])
+
+  /** Drop every local edit and take the document the Host actually holds. */
+  const adoptHost = useCallback((): void => {
+    const next = readDraft(configScope)
+    adoptedGroupsRef.current = groupsSignature(configScope)
+    draftRef.current = next
+    setDraft(next)
+  }, [configScope])
+
+  /**
+   * Re-read the catalog after a group write: the two tool lists show one row
+   * per catalog entry, and a saved group is a new entry the Host only knows
+   * about once the write landed.
+   */
+  const refreshCatalog = useCallback(async (): Promise<void> => {
+    try {
+      const next = await loadToolCatalog()
+      if (aliveRef.current)
+        setCatalog(next)
+    }
+    catch (problem) {
+      if (aliveRef.current)
+        setFailure(problem instanceof Error ? problem.message : String(problem))
+    }
+  }, [loadToolCatalog])
+
+  const send = useCallback(async (ops: readonly ConfigurationOp[]): Promise<boolean> => {
+    if (isReadOnly(configScope)) {
+      if (aliveRef.current)
+        setFailure('当前配置不可写，无法保存。')
+      return false
+    }
+    if (aliveRef.current)
+      setFailure('')
+    // No expected revision: the platform form serializes its own writes and
+    // tracks the pending revision, while a revision captured when the change
+    // was scheduled is stale by construction and gets the write rejected.
+    const accepted = await configScope.mutate([...ops])
+    if (!accepted && aliveRef.current)
+      setFailure('宿主拒绝了本次修改：配置未通过校验，或与其他修改冲突。')
+    // Only the entry set moves with groups; basicTools and the two switches are
+    // read straight off the draft, so they need no round trip.
+    if (accepted && ops.some(op => op.path[0] === 'groups')) {
+      // The write this page just made is not an external change: record the
+      // document it produced so the next notification does not refresh twice.
+      adoptedGroupsRef.current = groupsSignature(configScope)
+      await refreshCatalog()
+    }
+    return accepted
+  }, [configScope, refreshCatalog])
+
+  const queue = useMemo<SerialWriteQueue>(() => createSerialWriteQueue({
+    opsFor: fields => draftOps(draftRef.current, fields),
+    send,
+    onRefused: adoptHost,
+    onFailed: (problem: unknown) => {
+      adoptHost()
+      if (aliveRef.current)
+        setFailure(problem instanceof Error ? problem.message : String(problem))
+    },
+  }), [adoptHost, send])
+
+  /** Change the draft, then hand the touched fields to the serial write queue. */
+  const commitDraft = useCallback((change: (prev: ConfigurationDraft) => ConfigurationDraft, fields: readonly WriteField[]): void => {
+    updateDraft(change)
+    queue.mark(fields)
+  }, [queue, updateDraft])
+
   useEffect(() => {
     const sync = (): void => {
-      setBasicTools(readList(configScope, 'basicTools') ?? [])
-      setFlags({
-        requireApproval: readFlag(configScope, 'requireApproval'),
-        autoGroupMcp: readFlag(configScope, 'autoGroupMcp'),
-      })
-      setGroups(readGroups(configScope))
+      setReadOnly(isReadOnly(configScope))
+      // The draft owns the fields until every write lands: adopting the Host's
+      // older document mid-flight is what dropped a just-clicked tool.
+      if (queue.busy() || pendingGroupsRef.current !== undefined)
+        return
+      // An external grouping change is a new entry set, so the two tool lists
+      // have to be re-read as well; the draft alone would keep showing the old one.
+      const external = groupsSignature(configScope) !== adoptedGroupsRef.current
+      adoptHost()
+      if (external)
+        void refreshCatalog()
     }
     return configScope.subscribe(sync)
-  }, [configScope])
+  }, [adoptHost, configScope, queue, refreshCatalog])
 
   useEffect(() => {
     let cancelled = false
@@ -111,7 +258,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
         // The stored document may carry no basicTools field at all; the host's
         // live policy is then the only source for what is currently default.
         if (readList(configScope, 'basicTools') === undefined)
-          setBasicTools(next.basicTools)
+          updateDraft(prev => (prev.basicTools.length === 0 ? { ...prev, basicTools: [...next.basicTools] } : prev))
       })
       .catch((problem: unknown) => {
         if (!cancelled)
@@ -120,50 +267,24 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     return () => {
       cancelled = true
     }
-  }, [configScope, loadToolCatalog])
-
-  /** One write path for every control on the page: optimistic, then verified. */
-  const write = useCallback(async (field: string, value: unknown, revert: () => void): Promise<boolean> => {
-    const snapshot = configScope.getSnapshot()
-    if (snapshot.status !== 'ready' || !snapshot.writable) {
-      setFailure('当前配置不可写，无法保存。')
-      return false
-    }
-    setBusy(true)
-    setFailure('')
-    try {
-      const accepted = await configScope.mutate([{ op: 'set', path: [field], value }], snapshot.revision)
-      if (!accepted && aliveRef.current) {
-        revert()
-        setFailure('宿主拒绝了本次修改。')
-      }
-      return accepted
-    }
-    catch (problem) {
-      if (aliveRef.current) {
-        revert()
-        setFailure(problem instanceof Error ? problem.message : String(problem))
-      }
-      return false
-    }
-    finally {
-      if (aliveRef.current)
-        setBusy(false)
-    }
-  }, [configScope])
+  }, [configScope, loadToolCatalog, updateDraft])
 
   const groupsForEditor = useMemo<ToolGroupDraft[]>(
-    () => groups ?? (catalog?.groups ?? []).map(group => ({
-      identifier: group.identifier,
-      name: group.name,
-      description: group.description,
-      tools: [...group.tools],
-      sections: [...group.sections],
-    })),
-    [catalog, groups],
+    () => draft.groups ?? (catalog?.groups ?? []).map(cloneGroup),
+    [catalog, draft.groups],
   )
-  const requireApproval = flags.requireApproval ?? catalog?.requireApproval ?? true
-  const autoGroupMcp = flags.autoGroupMcp ?? catalog?.autoGroupMcp ?? true
+  const requireApproval = draft.requireApproval ?? catalog?.requireApproval ?? true
+  const autoGroupMcp = draft.autoGroupMcp ?? catalog?.autoGroupMcp ?? true
+  // The plugin pins two of its own tools, so no group may ever claim them: the
+  // activator loads tools, and the grouping tool rewrites the grouping — bundling
+  // either would let a group hand out the machinery that defines groups.
+  const lockedTools = useMemo(
+    () => [
+      ...(catalog?.entries ?? []).filter(entry => entry.identifier === ACTIVATOR_TOOL_NAME).flatMap(entry => entry.tools),
+      GROUPING_TOOL_NAME,
+    ],
+    [catalog],
+  )
 
   const partition = useMemo(() => {
     const entries = catalog?.entries ?? []
@@ -171,7 +292,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     const active: ActivationCatalogEntry[] = []
     const pending: ActivationCatalogEntry[] = []
     for (const entry of entries)
-      (entry.identifier === ACTIVATOR_TOOL_NAME || isDefaultLoaded(entry, basicTools) ? active : pending).push(entry)
+      (entry.identifier === ACTIVATOR_TOOL_NAME || isDefaultLoaded(entry, draft.basicTools) ? active : pending).push(entry)
     // The plugin's own base tools head their section; everything the user added
     // after them, each group alphabetical.
     const byBaseThenName = (left: ActivationCatalogEntry, right: ActivationCatalogEntry): number => {
@@ -179,29 +300,61 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
       return rank !== 0 ? rank : left.name.localeCompare(right.name)
     }
     return { active: active.sort(byBaseThenName), pending: pending.sort(byBaseThenName) }
-  }, [basicTools, catalog])
+  }, [catalog, draft.basicTools])
 
-  const toggle = useCallback(async (entry: ActivationCatalogEntry, next: boolean): Promise<void> => {
-    const names = new Set(basicTools)
-    for (const tool of entry.tools)
-      next ? names.add(tool) : names.delete(tool)
-    const updated = [...names]
-    const previous = basicTools
-    setBasicTools(updated)
-    await write('basicTools', updated, () => setBasicTools(previous))
-  }, [basicTools, write])
+  const toggle = useCallback((entry: ActivationCatalogEntry, next: boolean): void => {
+    commitDraft((prev) => {
+      const names = new Set(prev.basicTools)
+      for (const tool of entry.tools) {
+        if (next)
+          names.add(tool)
+        else
+          names.delete(tool)
+      }
+      return { ...prev, basicTools: [...names] }
+    }, ['basicTools'])
+  }, [commitDraft])
 
-  const setFlag = useCallback(async (field: 'requireApproval' | 'autoGroupMcp', next: boolean): Promise<void> => {
-    const previous = flags
-    setFlags({ ...flags, [field]: next })
-    await write(field, next, () => setFlags(previous))
-  }, [flags, write])
+  const setFlag = useCallback((field: 'requireApproval' | 'autoGroupMcp', next: boolean): void => {
+    commitDraft(prev => ({ ...prev, [field]: next }), [field])
+  }, [commitDraft])
 
-  const applyGroups = useCallback(async (next: ToolGroupDraft[]): Promise<void> => {
-    const previous = groupsForEditor
-    setGroups(next)
-    await write('groups', next, () => setGroups(previous))
-  }, [groupsForEditor, write])
+  /**
+   * The group draft stays local until it is savable, and a savable draft commits
+   * on a short debounce: writing per keystroke would round-trip the Host on
+   * every character, re-render the field, and drop the caret.
+   */
+  const applyGroups = useCallback((next: ToolGroupDraft[]): void => {
+    updateDraft(prev => ({ ...prev, groups: next }))
+    // Any hint belongs to the edit before this one; a new edit replaces it.
+    setFailure('')
+    if (groupsTimerRef.current !== undefined) {
+      clearTimeout(groupsTimerRef.current)
+      groupsTimerRef.current = undefined
+    }
+    pendingGroupsRef.current = undefined
+    if (!groupsSavable(next))
+      return
+    pendingGroupsRef.current = next
+    groupsTimerRef.current = setTimeout(() => {
+      groupsTimerRef.current = undefined
+      pendingGroupsRef.current = undefined
+      queue.mark(['groups'])
+    }, GROUPS_WRITE_DELAY_MS)
+  }, [queue, updateDraft])
+
+  /** Leaving the page must not drop an edit still waiting for its debounce. */
+  const flushGroups = useCallback((): void => {
+    const pending = pendingGroupsRef.current
+    pendingGroupsRef.current = undefined
+    if (groupsTimerRef.current !== undefined) {
+      clearTimeout(groupsTimerRef.current)
+      groupsTimerRef.current = undefined
+    }
+    if (pending !== undefined && groupsSavable(pending))
+      queue.mark(['groups'])
+  }, [queue])
+  useEffect(() => flushGroups, [flushGroups])
 
   if (view === 'summary')
     return <p className={CLASSES.description}>默认只提供基础工具，其余工具由模型按需加载。</p>
@@ -222,8 +375,8 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                 <span className={CLASSES.rowMeta} title={entry.description || entry.tools.join('、')}>{entry.description || entry.tools.join('、')}</span>
               </span>
               <ToolActivatorSwitch
-                checked={locked || isDefaultLoaded(entry, basicTools)}
-                disabled={busy || locked}
+                checked={locked || isDefaultLoaded(entry, draft.basicTools)}
+                disabled={readOnly || locked}
                 label={`默认加载 ${entry.name}`}
                 onChange={next => void toggle(entry, next)}
               />
@@ -251,38 +404,48 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                   <SettingRow
                     checked={requireApproval}
                     description="非完全权限时，激活工具前先请求你的确认；没有可用的审批服务时直接拒绝激活。完全权限时无需确认。"
-                    disabled={busy}
+                    disabled={readOnly}
                     label="激活前确认"
                     onChange={next => void setFlag('requireApproval', next)}
                   />
                   <SettingRow
                     checked={autoGroupMcp}
                     description="把同一 MCP 服务的工具（mcp__server__tool）聚成一个条目，模型一次激活整个服务；关闭后每个工具各自激活。"
-                    disabled={busy}
+                    disabled={readOnly}
                     label="按 MCP 服务分组"
                     onChange={next => void setFlag('autoGroupMcp', next)}
                   />
                 </ul>
               </section>
-              <section className={CLASSES.section}>
-                <h4 className={CLASSES.sectionTitle}>{`默认激活工具（${partition.active.length} 个）`}</h4>
+              <Collapsible
+                label={`默认激活工具（${partition.active.length} 个）`}
+                onToggle={next => setOpenLists(prev => ({ ...prev, active: next }))}
+                open={openLists.active}
+              >
                 {partition.active.length === 0
                   ? <p className={CLASSES.help}>当前没有默认激活的工具。</p>
                   : renderRows(partition.active)}
-              </section>
-              <section className={CLASSES.section}>
-                <h4 className={CLASSES.sectionTitle}>{`已安装但需先激活（${partition.pending.length} 个）`}</h4>
+              </Collapsible>
+              <Collapsible
+                label={`已安装但需先激活（${partition.pending.length} 个）`}
+                onToggle={next => setOpenLists(prev => ({ ...prev, pending: next }))}
+                open={openLists.pending}
+              >
                 {partition.pending.length === 0
                   ? <p className={CLASSES.help}>全部工具都已默认激活。</p>
                   : renderRows(partition.pending)}
-              </section>
+                <p className={CLASSES.help}>按会话注册的工具（例如 git-bash 的 bash）要先有会话在跑才会出现在这里。</p>
+              </Collapsible>
               <section className={CLASSES.section}>
                 <h4 className={CLASSES.sectionTitle}>工具分组</h4>
                 <p className={CLASSES.help}>一组工具共用一个标识符，模型激活该标识符即可一次拿到整组；留空则每个工具各自成为一个条目。</p>
                 <GroupsEditor
-                  disabled={busy}
+                  disabled={readOnly}
+                  basicTools={draft.basicTools}
+                  lockedTools={lockedTools}
                   groups={groupsForEditor}
-                  onChange={next => void applyGroups(next)}
+                  onBlocked={(tool: string) => setFailure(`工具 ${tool} 已属于默认激活或其他分组，不能再加入这一组。`)}
+                  onChange={applyGroups}
                   toolNames={(catalog.entries ?? []).flatMap(entry => entry.tools)}
                 />
               </section>

@@ -45,13 +45,21 @@
 
 此外，任意已安装插件的工具都可作为标识请求；开启 `autoGroupMcp` 时，`mcp__server__tool` 还会按 server 聚合为 `mcp.server`。
 
-实际可用集合将以 `<available_tools>` 目录呈现，该目录随提示词注入给模型，只有标识、名称和一句简述：
+实际可用集合将以 `<available_tools>` 目录呈现。该目录作为本插件自己的消息注入给模型，不占用宿主的运行时上下文快照，只有标识、名称和一句简述：
 
 ```xml
 <available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">
   <tool identifier="web_search" name="web_search">Search the public web for current information.</tool>
   <tool identifier="mcp.mail" name="mail">send: Send a message through the mailbox.</tool>
 </available_tools>
+```
+
+已激活的条目只保留标识符与可调用的成员名：工具描述已经在请求头的声明里，不必再重复一遍。
+
+```xml
+<activated_tools>
+  <tool identifier="mcp.mail" names="send,receive"/>
+</activated_tools>
 ```
 
 模型可按需请求加载工具或组：
@@ -68,6 +76,18 @@
 路由声明支持对话中途变更工具时（`deepseek-flash` 等，见模型目录的 `toolUpdate`），插件把**全部**工具一次性声明出去：基础工具正常声明，其余标 `defer_loading`（不占上下文 token）。激活因此不改动声明列表，只在会话尾部追加一条 `tool_addition`，提供方此前缓存的前缀保持有效。
 
 不支持该能力的路由退回"按激活状态过滤声明列表"，功能不变，但每次新激活会重算一次请求头。
+
+### 模型按需整理分组（`group_tools`）
+
+用户明确要求整理分组时，模型可调用 `group_tools`：
+
+* `action: "list"`：读当前作用域的分组与成员、尚未被任何分组认领的工具、基础工具与锁定工具。
+* `action: "apply"`：按 `ops` 增（`add`）、改（`update` 名称、说明、整组成员，或用 `rename` 换标识符）、删（`remove`）分组；一次调用里可以先把工具从旧组删掉、再加进新组。
+* `basic` 是默认存在的基础工具分组：只能 `update` 它的成员，`add` / `remove` 会被拒绝。
+
+写入落在插件配置的 `groups` 字段，与配置页「工具分组」区是同一份文档。一次调用要么全成、要么全不成：被拒的批次一次列出全部问题，配置一个字节不变。收据只回新增 / 改写 / 删除的标识符与改名映射，模型拿到新标识符即可直接激活。
+
+分组是用户的决定：**只在用户明确要求整理分组时调用该工具**，不要自作主张重组目录。
 
 ---
 
