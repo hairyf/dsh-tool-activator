@@ -1,21 +1,27 @@
-import type { ActivateToolsParams, ActivationResult, ActivatorRuntimeService, ToolManifestInfo } from './types'
+import type { ActivateToolsParams, ActivationResult, ActivatorRuntimeService, ToolCatalogItem } from './types'
 import { describe, expect, it, vi } from 'vitest'
 import { ActivatorExecutionRuntime } from './runtime'
 
-const repositoryManifest: ToolManifestInfo = {
+const repositoryManifest: ToolCatalogItem = {
   apiDescriptions: [
     { description: 'Detailed repository search documentation.', name: 'repo_search' },
     { description: 'Detailed issue creation documentation.', name: 'repo_create_issue' },
   ],
   avatar: '🔧',
+  description: 'Repository tools',
   identifier: 'repository',
   name: 'Repository',
+  sections: [],
   systemRole: 'Full repository operating instructions belong in the system prompt.',
+  tools: [
+    { description: 'Detailed repository search documentation.', name: 'repo_search', parameters: { type: 'object', properties: {} } },
+    { description: 'Detailed issue creation documentation.', name: 'repo_create_issue', parameters: { type: 'object', properties: {} } },
+  ],
 }
 
 function createService(overrides: Partial<ActivatorRuntimeService> = {}): ActivatorRuntimeService {
   return {
-    getActivatedToolIds: vi.fn((): string[] => []),
+    getActiveIdentifiers: vi.fn((): string[] => []),
     getToolManifests: vi.fn<ActivatorRuntimeService['getToolManifests']>().mockResolvedValue([]),
     markActivated: vi.fn<ActivatorRuntimeService['markActivated']>(),
     ...overrides,
@@ -35,7 +41,7 @@ describe('activatorExecutionRuntime', () => {
         content: 'Skill activation is not available.',
         success: false,
       })
-      expect(service.getActivatedToolIds).not.toHaveBeenCalled()
+      expect(service.getActiveIdentifiers).not.toHaveBeenCalled()
       expect(service.getToolManifests).not.toHaveBeenCalled()
       expect(service.markActivated).not.toHaveBeenCalled()
     })
@@ -82,7 +88,7 @@ describe('activatorExecutionRuntime', () => {
         content: 'No tool identifiers provided. Please specify which tools to activate.',
         success: false,
       })
-      expect(service.getActivatedToolIds).not.toHaveBeenCalled()
+      expect(service.getActiveIdentifiers).not.toHaveBeenCalled()
       expect(service.getToolManifests).not.toHaveBeenCalled()
       expect(service.markActivated).not.toHaveBeenCalled()
     })
@@ -97,7 +103,7 @@ describe('activatorExecutionRuntime', () => {
         content: 'No tool identifiers provided. Please specify which tools to activate.',
         success: false,
       })
-      expect(service.getActivatedToolIds).not.toHaveBeenCalled()
+      expect(service.getActiveIdentifiers).not.toHaveBeenCalled()
       expect(service.getToolManifests).not.toHaveBeenCalled()
       expect(service.markActivated).not.toHaveBeenCalled()
     })
@@ -116,7 +122,7 @@ describe('activatorExecutionRuntime', () => {
         content: 'Successfully activated tools: repo_search, repo_create_issue.\nUsage instructions for the activated items are in the system prompt.',
         state: {
           activatedSkills: [],
-          activatedTools: [{ apiCount: 2, avatar: '🔧', identifier: 'repository', name: 'Repository' }],
+          activatedTools: [{ apiCount: 2, avatar: '🔧', identifier: 'repository', name: 'Repository', tools: ['repo_search', 'repo_create_issue'] }],
           alreadyActive: [],
           notFound: [],
         },
@@ -129,11 +135,14 @@ describe('activatorExecutionRuntime', () => {
     })
 
     it('accepts an instruction-only manifest with zero APIs', async () => {
-      const manifest: ToolManifestInfo = {
+      const manifest: ToolCatalogItem = {
         apiDescriptions: [],
+        description: 'Instructions only',
         identifier: 'instructions',
         name: 'Instructions',
+        sections: [],
         systemRole: 'Instruction-only documentation.',
+        tools: [],
       }
       const service = createService({
         getToolManifests: vi.fn<ActivatorRuntimeService['getToolManifests']>().mockResolvedValue([manifest]),
@@ -144,7 +153,7 @@ describe('activatorExecutionRuntime', () => {
         content: 'Successfully activated tools: instructions.\nUsage instructions for the activated items are in the system prompt.',
         state: {
           activatedSkills: [],
-          activatedTools: [{ apiCount: 0, avatar: undefined, identifier: 'instructions', name: 'Instructions' }],
+          activatedTools: [{ apiCount: 0, avatar: undefined, identifier: 'instructions', name: 'Instructions', tools: [] }],
           alreadyActive: [],
           notFound: [],
         },
@@ -155,7 +164,7 @@ describe('activatorExecutionRuntime', () => {
 
     it('does not look up or mark identifiers that the service says are already active', async () => {
       const service = createService({
-        getActivatedToolIds: vi.fn(() => ['active']),
+        getActiveIdentifiers: vi.fn(() => ['active']),
         getToolManifests: vi.fn<ActivatorRuntimeService['getToolManifests']>().mockResolvedValue([repositoryManifest]),
       })
       const runtime = new ActivatorExecutionRuntime(service)
@@ -172,7 +181,7 @@ describe('activatorExecutionRuntime', () => {
     })
 
     it('still performs an empty manifest lookup when every requested identifier is active', async () => {
-      const service = createService({ getActivatedToolIds: vi.fn(() => ['active']) })
+      const service = createService({ getActiveIdentifiers: vi.fn(() => ['active']) })
       const runtime = new ActivatorExecutionRuntime(service)
 
       expect(await runtime.activateTools({ identifiers: ['active'], reason: 'Use an active tool.' })).toEqual({
@@ -186,7 +195,7 @@ describe('activatorExecutionRuntime', () => {
 
     it('does not deduplicate request identifiers or the manifests returned by its service', async () => {
       const service = createService({
-        getActivatedToolIds: vi.fn(() => ['active']),
+        getActiveIdentifiers: vi.fn(() => ['active']),
         getToolManifests: vi.fn<ActivatorRuntimeService['getToolManifests']>()
           .mockResolvedValue([repositoryManifest, repositoryManifest]),
       })
@@ -260,7 +269,7 @@ describe('activatorExecutionRuntime', () => {
       })
       const service = createService({
         activateSkill,
-        getActivatedToolIds: vi.fn(() => ['active']),
+        getActiveIdentifiers: vi.fn(() => ['active']),
         getToolManifests: vi.fn<ActivatorRuntimeService['getToolManifests']>().mockResolvedValue([repositoryManifest]),
       })
       const runtime = new ActivatorExecutionRuntime(service)
@@ -364,7 +373,7 @@ describe('activatorExecutionRuntime', () => {
 
     it('returns failure when reading the current activated set throws', async () => {
       const service = createService({
-        getActivatedToolIds: vi.fn(() => { throw new Error('Activation state unavailable') }),
+        getActiveIdentifiers: vi.fn(() => { throw new Error('Activation state unavailable') }),
       })
       const runtime = new ActivatorExecutionRuntime(service)
 
