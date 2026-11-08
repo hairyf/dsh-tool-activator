@@ -62,14 +62,27 @@ export function buildToolCatalog(schemas: readonly ToolSchema[], policy: ToolPol
   return entries.sort((a, b) => a.identifier < b.identifier ? -1 : a.identifier > b.identifier ? 1 : 0)
 }
 
-export function enabledToolNames(catalog: readonly ToolCatalogItem[], policy: ToolPolicy, activatedIds: readonly string[]): Set<string> {
+export function enabledToolNames(catalog: readonly ToolCatalogItem[], policy: ToolPolicy, activatedIds: readonly string[], activatedToolNames: readonly string[] = []): Set<string> {
   const enabled = new Set<string>([ACTIVATOR_TOOL_NAME, 'run_code'])
   const active = new Set(activatedIds)
+  const activeNames = new Set(activatedToolNames)
+  // The allow set is a policy/history function, not a registry snapshot: the
+  // admission gate only subtracts names from what actually resolves, so seeding
+  // a not-yet-registered name is inert and a tool that registers after the gate
+  // (a per-agent bash, a plugin's own tools) passes on the first turn. The
+  // seeded names also outlive their group: a renamed, split or deleted group
+  // must not take the tools a session already activated away.
+  for (const name of policy.basicTools)
+    enabled.add(name)
+  for (const name of activeNames)
+    enabled.add(name)
   for (const entry of catalog) {
-    for (const tool of entry.tools) {
-      if (policy.basicTools.includes(tool.name) || active.has(entry.identifier))
-        enabled.add(tool.name)
-    }
+    // An activated group contributes its current members; a renamed or split
+    // group is a different identifier and must not ride in on the old one.
+    if (!active.has(entry.identifier))
+      continue
+    for (const tool of entry.tools)
+      enabled.add(tool.name)
   }
   return enabled
 }

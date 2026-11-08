@@ -138,6 +138,7 @@ function fold(events: readonly SessionEvent[], initial = emptyActivationHistory(
 
 function expectHistory(actual: ActivationHistory, expected: ActivationHistory): void {
   expect(actual.activatedToolIds).toEqual(expected.activatedToolIds)
+  expect(actual.activatedToolNames ?? []).toEqual(expected.activatedToolNames ?? [])
   expect(actual.activatedSkills).toEqual(expected.activatedSkills)
   expect(actual.pendingCalls).toEqual(expected.pendingCalls)
   expect(actual.pendingActivations ?? []).toEqual(expected.pendingActivations ?? [])
@@ -198,6 +199,31 @@ describe('mergeActivation', () => {
     expect(mergeActivation(state, envelope(['files', 'files']))).toBe(state)
     expect(mergeActivation(state, missing)).toBe(state)
   })
+
+  it('folds the tool names a receipt carries next to the identifiers', () => {
+    const result = envelope(['files'])
+    result.state.activatedTools = [{ identifier: 'files', name: 'Files', apiCount: 2, tools: ['read', 'write'] }]
+
+    const next = mergeActivation(emptyActivationHistory(), result)
+
+    expect(next.activatedToolIds).toEqual(['files'])
+    expect(next.activatedToolNames).toEqual(['read', 'write'])
+  })
+
+  it('folds an old receipt that carries no tool names without inventing any', () => {
+    const next = mergeActivation(emptyActivationHistory(), envelope(['files']))
+
+    expect(next.activatedToolIds).toEqual(['files'])
+    expect(next.activatedToolNames ?? []).toEqual([])
+  })
+
+  it('keeps the names it already folded when a later receipt carries none', () => {
+    const state: ActivationHistory = { activatedToolIds: ['files'], activatedToolNames: ['read'], activatedSkills: [], pendingCalls: [] }
+    const next = mergeActivation(state, envelope(['web']))
+
+    expect(next.activatedToolIds).toEqual(['files', 'web'])
+    expect(next.activatedToolNames).toEqual(['read'])
+  })
 })
 
 describe('foldActivationEvent native call pairing', () => {
@@ -208,6 +234,17 @@ describe('foldActivationEvent native call pairing', () => {
     ])
 
     expectHistory(next, { activatedToolIds: ['files'], activatedSkills: [skill('review')], pendingCalls: [] })
+  })
+
+  it('folds the tool names a receipt carries so a restored session keeps them', () => {
+    const activation = receipt('call:1', ['files'])
+    activation.state.activatedTools = [{ identifier: 'files', name: 'Files', apiCount: 2, tools: ['read', 'write'] }]
+    const next = fold([
+      requestedCall('call:1', ['files']),
+      resultEvent('call:1', text(activation)),
+    ])
+
+    expectHistory(next, { activatedToolIds: ['files'], activatedToolNames: ['read', 'write'], activatedSkills: [], pendingCalls: [] })
   })
 
   it('rejects ordinary envelopes and metadata-only receipts even after a valid activator call', () => {

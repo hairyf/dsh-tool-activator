@@ -1,10 +1,10 @@
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
-import type { AssembledSection, PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
+import type { AssembledSection } from '@deepseek-ai/dsh-system-prompt'
 import type { ToolPolicy } from './shared'
-import type { ToolCatalogItem } from './types'
+import type { AssembledPrompt, CatalogEntry, PreparedPrompt, ToolCatalogItem } from './types'
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { availableToolsForDiscovery, sectionToolDependencies } from './catalog'
-import { ACTIVATION_CONTEXT_NAME, ACTIVATOR_TOOL_NAME, RUN_CODE_TOOL_NAME } from './constants'
+import { ACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME, RUN_CODE_TOOL_NAME } from './constants'
 
 export function escapeXml(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll('\'', '&apos;')
@@ -17,12 +17,49 @@ export function availableToolsPrompts(tools: readonly ToolCatalogItem[]): string
   return `<available_tools description="These tools are installed but not yet enabled. Use ${ACTIVATOR_TOOL_NAME} to enable them when needed.">\n${rows.join('\n')}\n</available_tools>`
 }
 
+/**
+ * The catalog is a complete state that changes whenever the enabled tools
+ * change, so it is republished rather than patched: the note tells the model
+ * that this copy replaces every earlier one.
+ */
+const CATALOG_SUPERSEDE_NOTE = 'This is the current tool catalog for this session; it supersedes any earlier tool-activator catalog in this conversation.'
+
+/**
+ * The entries the model already activated.
+ *
+ * Only the identifier it activates by and the member names it can now call
+ * belong here: an activated tool carries its full schema in the request
+ * header, so repeating the description would spend context on a second copy
+ * of the same text.
+ */
+export function activatedToolsPrompts(catalog: readonly ToolCatalogItem[], enabledNames: ReadonlySet<string>): string {
+  const rows: string[] = []
+  for (const entry of catalog) {
+    const names = entry.tools.filter(tool => enabledNames.has(tool.name)).map(tool => tool.name)
+    if (names.length === 0)
+      continue
+    rows.push(`  <tool identifier="${escapeXml(entry.identifier)}" names="${escapeXml(names.join(','))}"/>`)
+  }
+  if (rows.length === 0)
+    return ''
+  return `<activated_tools>\n${rows.join('\n')}\n</activated_tools>`
+}
+
+/**
+ * The entries the model can still activate, for a consumer that presents the
+ * catalog as a list instead of as prose. They are exactly the entries the
+ * `<available_tools>` directory lists.
+ */
+export function catalogEntries(catalog: readonly ToolCatalogItem[], enabledNames: ReadonlySet<string>): CatalogEntry[] {
+  return availableToolsForDiscovery(catalog, enabledNames).map(entry => ({ name: entry.identifier, description: entry.description }))
+}
 export function activatorSystemPrompt(skillAvailable: boolean): string {
   const sections = [
     '# Tools Activator',
     `Only basic and already activated tools have full schemas. The <available_tools> catalog lists additional tools without their schemas. When the user requests a task, choose only the relevant identifiers and call ${ACTIVATOR_TOOL_NAME} once with all needed identifiers and a concise reason before using those tools.`,
     'After activation, use the actual callable names listed in the result and the schemas and usage instructions provided on the next model call. Do not activate tools again when they are already available.',
     'Activation changes model-facing availability, not execution permission. Existing approval, sandbox, provider, and scope restrictions remain authoritative. Unknown, removed, or excluded tools cannot be made available by guessing identifiers.',
+    `The user decides how the tools are grouped: call ${GROUPING_TOOL_NAME} only when the user explicitly asks to organize or regroup the tools, and never reorganize the catalog on your own initiative.`,
     'When credentials are required, use an existing secure credential input mechanism. Never ask users to paste secrets into chat or claim a credential manager or sandbox integration that is not installed.',
   ]
   if (skillAvailable)
@@ -38,45 +75,70 @@ export function selectToolSections(sections: readonly AssembledSection[], catalo
   })
 }
 
-export function activationPrompt(assembly: PromptAssembly, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, skillInstructions: readonly string[] = []): string {
+/**
+ * The catalog the model reads about the tools it may call.
+ *
+ * It is one complete state: the activation rules, the directory of the tools
+ * that are still on demand, the entries that are already activated, the usage
+ * documentation of the enabled tools, and the instructions of the activated
+ * skills.
+ */
+export function activationPrompt(assembly: AssembledPrompt, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, skillInstructions: readonly string[] = []): string {
   const selectedSections = selectToolSections(assembly.sections, catalog, policy, enabledNames)
   const dependencies = sectionToolDependencies(catalog, policy)
   const docs = selectedSections.filter(section => Object.hasOwn(dependencies, section.name) || section.name === 'tools:sdk')
   const parts: string[] = []
   parts.push(activatorSystemPrompt(enabledNames.has('skill')))
+  parts.push(CATALOG_SUPERSEDE_NOTE)
   const discovery = availableToolsPrompts(availableToolsForDiscovery(catalog, enabledNames))
   if (discovery)
     parts.push(discovery)
-  for (const entry of catalog) {
-    const visible = entry.tools.filter(tool => enabledNames.has(tool.name))
-    if (visible.length === 0)
-      continue
-    parts.push(`<activated_tool identifier="${escapeXml(entry.identifier)}">\n${visible.map(tool => `${escapeXml(tool.name)}: ${escapeXml(tool.description)}`).join('\n')}\n</activated_tool>`)
-  }
-  const renderedDocs = renderPrompt({ ...assembly, sections: docs })
+  const activated = activatedToolsPrompts(catalog, enabledNames)
+  if (activated)
+    parts.push(activated)
+  // `renderPrompt` is typed against the full assembly even though it only renders
+  // sections and variables; tool declarations play no part in this text.
+  const renderedDocs = renderPrompt({ ...assembly, tools: [...(assembly.tools ?? [])], sections: docs })
   if (renderedDocs)
     parts.push(renderedDocs)
   parts.push(...skillInstructions)
   return parts.join('\n\n')
 }
 
-export function filterPromptAssembly(assembly: PromptAssembly, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, sdk: string | undefined, skillInstructions: readonly string[] = [], deferDeclarations = false): PromptAssembly {
-  if (!assembly.contexts.some(context => context.name === ACTIVATION_CONTEXT_NAME))
-    throw new Error('dsh-tool-activator requires runtime context; enable it or disable the plugin for this agent')
+/**
+ * Split one assembly into the system prompt and the catalog.
+ *
+ * The system prompt must not change when a tool is activated — the provider
+ * caches its prefix — so the sections that depend on the enabled tools leave
+ * the prompt and travel with the catalog instead.
+ */
+export function preparePromptAssembly(assembly: AssembledPrompt, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, sdk: string | undefined, skillInstructions: readonly string[] = [], deferDeclarations = false): PreparedPrompt {
   const prepared = {
     ...assembly,
     sections: assembly.sections.map(section => section.name === 'tools:sdk' && sdk !== undefined ? { ...section, text: sdk, interpolate: false } : section),
   }
   const dependencies = sectionToolDependencies(catalog, policy)
+  // Tool declarations are provider-owned from dsh 0.2.2 on: the waterfall receives
+  // a presentation and the host merges the schemas afterwards, discarding anything
+  // written back here. Skip that half of the contract instead of dereferencing a
+  // missing list, and keep the sections/variables half that still applies.
+  const declarations = assembly.tools
+  const declarationsPatch = declarations === undefined
+    ? {}
+    : {
+        tools: deferDeclarations
+          ? deferredToolSchemas(declarations, policy)
+          : declarations.filter(tool => enabledNames.has(tool.name)),
+      }
   return {
-    ...assembly,
-    tools: deferDeclarations
-      ? deferredToolSchemas(assembly.tools, policy)
-      : assembly.tools.filter(tool => enabledNames.has(tool.name)),
-    sections: prepared.sections.filter(section => !Object.hasOwn(dependencies, section.name) && section.name !== 'tools:sdk'),
-    variables: {
-      ...assembly.variables,
-      tool_activator_context: activationPrompt(prepared, catalog, policy, enabledNames, skillInstructions),
+    assembly: {
+      ...assembly,
+      ...declarationsPatch,
+      sections: prepared.sections.filter(section => !Object.hasOwn(dependencies, section.name) && section.name !== 'tools:sdk'),
+    },
+    catalog: {
+      text: activationPrompt(prepared, catalog, policy, enabledNames, skillInstructions),
+      entries: catalogEntries(catalog, enabledNames),
     },
   }
 }
