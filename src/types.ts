@@ -9,6 +9,8 @@ export interface CatalogEntry {
   name: string
   /** What this entry covers, in one line. */
   description: string
+  /** Member names this entry carries, so a republication can name what left it. */
+  tools: string[]
 }
 
 /** One publication of the tool catalog. */
@@ -17,6 +19,11 @@ export interface CatalogPublication {
   text: string
   /** The entries still available in this session, in catalog order. */
   entries: readonly CatalogEntry[]
+  /**
+   * 全量目录的成员表（含已激活条目）。publisher 用它判定「消失」：条目只是
+   * 被激活而离开可选目录时，它还在这里，不会被误报成已卸载。
+   */
+  members: readonly CatalogEntry[]
 }
 
 /**
@@ -29,7 +36,7 @@ export interface CatalogPublication {
  */
 export type ActivatorMessageSource
   = | { readonly kind: 'tool-activator' }
-    | { readonly kind: 'tool-activator', readonly form: 'catalog', readonly entries: readonly CatalogEntry[], readonly update?: true }
+    | { readonly kind: 'tool-activator', readonly form: 'catalog', readonly entries: readonly CatalogEntry[], readonly members?: readonly CatalogEntry[], readonly update?: true }
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -198,6 +205,11 @@ export interface ActivationCatalog {
   entries: ActivationCatalogEntry[]
   groups: ToolGroup[]
   requireApproval: boolean
+  /**
+   * 工具名集合：分组或基础工具里仍配置着、但当前真实工具面已不存在的名字，
+   * 宿主端判定，配置页据此标注缺失成员。可选：旧宿主的返回没有这个字段。
+   */
+  uninstalledToolNames?: string[]
 }
 
 /**

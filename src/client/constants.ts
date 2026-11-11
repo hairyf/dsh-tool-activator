@@ -40,6 +40,8 @@ export const CLASSES = {
   fieldWide: 'dsh-tool-activator-field-wide',
   choices: 'dsh-tool-activator-choices',
   choice: 'dsh-tool-activator-choice',
+  choiceMissing: 'dsh-tool-activator-choice-missing',
+  missingNote: 'dsh-tool-activator-missing-note',
   toolbar: 'dsh-tool-activator-toolbar',
   collapsible: 'dsh-tool-activator-collapsible',
   collapsibleHeader: 'dsh-tool-activator-collapsible-header',

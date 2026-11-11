@@ -62,6 +62,14 @@
 </activated_tools>
 ```
 
+卸载插件或删除分组后，重发的目录不再只靠开头一句 supersede 声明，而是追加 `<removed_tools>` 段点名消失的条目与成员名，模型据此认定旧行失效（被激活而离开可选目录的条目不算消失）：
+
+```xml
+<removed_tools description="These entries or members are no longer in the tool catalog; their plugin may have been uninstalled or the group rewritten. Ignore any earlier mention of them.">
+  <tool identifier="old_plugin" names="old_a,old_b"/>
+</removed_tools>
+```
+
 模型可按需请求加载工具或组：
 
 ```json
@@ -104,11 +112,11 @@
 | **默认激活** | 每次请求都带完整 schema 的工具；基础工具排在最前并带"基础工具"标记，但允许关闭；仅 `activate_tools` 的开关固定开启且不可关闭 |
 | **按需激活** | 其余工具，模型可使用 `activate_tools` 按需获取 |
 
-打开某一项的开关即把它写进 `basicTools`（默认加载），关闭则移回按需区；工具清单与描述由宿主 Remote `toolActivator/catalog` 提供，覆盖当前所有 live agent 作用域。
+打开某一项的开关即把它写进 `basicTools`（默认加载），关闭则移回按需区；工具清单与描述由宿主 Remote `toolActivator/catalog` 提供，覆盖当前所有 live agent 作用域。该 Remote 同时返回 `uninstalledToolNames`：配置里仍挂着、但当前工具面已不存在的工具名（按会话注册的工具在没有存活会话时也会计入）。
 
 **常规**区两个开关：`requireApproval`（非完全权限时激活前请求确认，缺少审批服务时直接拒绝；完全权限 `danger-full-access` 时无需确认，即使审批策略为 `never`）与 `autoGroupMcp`（按 `mcp__server__tool` 前缀聚合同一 MCP 服务）
 
-**工具分组**区是结构化编辑器：每个分组有标识符、名称、说明、工具勾选（只能从当前目录里的真实工具中选）和说明节绑定，支持增删；留空则每个工具各自成为条目。`sectionTools` 仍留在 schema 里（进阶用法：说明节到工具名的依赖映射），但不再出现在表单中。
+**工具分组**区是结构化编辑器：每个分组有标识符、名称、说明、工具勾选（只能从当前目录里的真实工具中选）和说明节绑定，支持增删；留空则每个工具各自成为条目。已卸载的成员带「已卸载」标注并可一键移除（持久化配置不被自动改动；整组成员都卸载时空分组不会保存）。默认激活区同样点名已卸载的基础工具并提供移除。`sectionTools` 仍留在 schema 里（进阶用法：说明节到工具名的依赖映射），但不再出现在表单中。
 
 ---
 

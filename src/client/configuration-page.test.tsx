@@ -597,4 +597,25 @@ describe('tool configuration page', () => {
     // The entry set did not move, so the tool lists the page already has are still right.
     expect(load).toHaveBeenCalledTimes(1)
   })
+
+  it('names the basic tools a plugin left behind and removes them from the defaults', async () => {
+    const withMissing: ActivationCatalog = { ...CATALOG, uninstalledToolNames: ['legacy_basic'] }
+    const scope = scopeOf({ basicTools: ['read', 'legacy_basic'] })
+    renderPage(scope, async () => withMissing)
+    await openToolLists()
+
+    expect(screen.getByText('legacy_basic').className).toContain('dsh-tool-activator-choice-missing')
+    expect(screen.getByText('已卸载（所属插件可能已被移除；按会话注册的工具在会话运行时恢复）')).toBeTruthy()
+    expect(screen.getByText(/基础工具里已卸载 1 个：legacy_basic/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '移除已卸载的基础工具' }))
+    await waitFor(() => expect(scope.mutate).toHaveBeenCalledWith([{ op: 'set', path: ['basicTools'], value: ['read'] }]))
+  })
+
+  it('shows no missing annotation while the catalog reports nothing uninstalled', async () => {
+    renderPage(scopeOf({ basicTools: ['read'] }))
+
+    expect(await screen.findByText('默认激活工具（1 个）')).toBeTruthy()
+    expect(screen.queryByText(/已卸载/)).toBeNull()
+  })
 })

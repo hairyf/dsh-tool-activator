@@ -5,6 +5,7 @@ import type { ToolPolicy } from './shared'
 import type { ActivationCatalog } from './types'
 import { buildToolCatalog } from './catalog'
 import { ACTIVATOR_TOOL_NAME, SETTINGS_REMOTE_NAMESPACE } from './constants'
+import { missingToolNames } from './groups'
 import { DEFAULT_POLICY } from './shared'
 
 const REMOTE_METHODS = '@deepseek-ai/dsh-typert-protocol/remote-methods'
@@ -40,7 +41,15 @@ export class ToolActivatorRemote {
 
   catalog(): ActivationCatalog {
     const policy = this.policy()
-    const activator: ToolSchema | undefined = this.schemas().find(schema => schema.name === ACTIVATOR_TOOL_NAME)
+    const schemas = this.schemas()
+    const activator: ToolSchema | undefined = schemas.find(schema => schema.name === ACTIVATOR_TOOL_NAME)
+    // 缺失判定与 groupingSnapshot 同一个口径，都读宿主真实工具面；按会话注册
+    // 的工具在没有存活会话时也会落进缺失名单，配置页文案里带这条说明。
+    const missing = missingToolNames({
+      groups: policy.groups,
+      tools: schemas.map(schema => schema.name),
+      basicTools: policy.basicTools,
+    })
     return {
       autoGroupMcp: policy.autoGroupMcp,
       basicTools: [...policy.basicTools],
@@ -68,6 +77,8 @@ export class ToolActivatorRemote {
         sections: [...group.sections],
       })),
       requireApproval: policy.requireApproval,
+      // 宿主端判定，配置页据此标注缺失成员。
+      uninstalledToolNames: missing,
     }
   }
 }

@@ -74,6 +74,8 @@ export interface GroupsEditorProps {
   onBlocked?: (tool: string) => void
   /** Every tool name the catalog knows, so a group can only reference real tools. */
   toolNames: readonly string[]
+  /** 已卸载的工具名（宿主端判定随 catalog 下发）；缺省视为没有缺失成员。 */
+  uninstalledTools?: readonly string[]
   onChange: (next: ToolGroupDraft[]) => void
 }
 

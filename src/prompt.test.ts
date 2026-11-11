@@ -289,7 +289,7 @@ describe('preparePromptAssembly', () => {
     expect(prepared.catalog.text).toContain('READ_USAGE_BODY')
     expect(prepared.catalog.text).not.toContain('WRITE_USAGE_BODY')
     expect(prepared.catalog.text.split('SCOPED_SDK_BODY')).toHaveLength(2)
-    expect(prepared.catalog.entries).toEqual([{ name: 'write', description: 'write catalog description' }])
+    expect(prepared.catalog.entries).toEqual([{ name: 'write', description: 'write catalog description', tools: ['write'] }])
   })
 
   it('publishes the catalog without a runtime context of its own', () => {

@@ -1,10 +1,10 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
-import type { CatalogPublication } from './types'
+import type { CatalogEntry, CatalogPublication } from './types'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
 import { ACTIVATOR_SOURCE_KIND } from './constants'
-import { catalogMessages, createCatalogPublisher } from './injection'
+import { catalogMessages, createCatalogPublisher, removedCatalogEntries } from './injection'
 
 /** An agent whose session carries the given history and can take new messages. */
 function fakeAgent(history: UserMessage[] = []): { agent: Agent, land: (message: UserMessage) => void, drop: () => void } {
@@ -20,8 +20,8 @@ function fakeAgent(history: UserMessage[] = []): { agent: Agent, land: (message:
   }
 }
 
-function publication(text: string): CatalogPublication {
-  return { text, entries: [{ name: 'web_search', description: 'Search the web' }] }
+function publication(text: string, entries: CatalogEntry[] = [{ name: 'web_search', description: 'Search the web', tools: ['web_search'] }], members: CatalogEntry[] = entries): CatalogPublication {
+  return { text, entries, members }
 }
 
 function carried(text: string): UserMessage {
@@ -43,7 +43,8 @@ describe('createCatalogPublisher', () => {
     expect(message?.source).toEqual({
       kind: ACTIVATOR_SOURCE_KIND,
       form: 'catalog',
-      entries: [{ name: 'web_search', description: 'Search the web' }],
+      entries: [{ name: 'web_search', description: 'Search the web', tools: ['web_search'] }],
+      members: [{ name: 'web_search', description: 'Search the web', tools: ['web_search'] }],
     })
     expect(message?.content).toEqual([{ type: 'text', text: 'CATALOG' }])
   })
@@ -104,5 +105,59 @@ describe('createCatalogPublisher', () => {
     const message = carried('CATALOG')
 
     expect(catalogMessages(fakeAgent([message]).agent)).toEqual([message])
+  })
+
+  it('names the entries and members that vanished when republishing a shrunken catalog', () => {
+    const publisher = createCatalogPublisher()
+    const { agent, land } = fakeAgent()
+    publisher.prepare(agent, publication('FIRST', [
+      { name: 'web_search', description: 'Search the web', tools: ['web_search'] },
+      { name: 'files', description: 'File utilities', tools: ['read', 'write'] },
+    ]))
+    land(publisher.publish(agent)!)
+    publisher.prepare(agent, publication('SECOND', [
+      { name: 'files', description: 'File utilities', tools: ['read'] },
+    ]))
+
+    const message = publisher.publish(agent)
+
+    expect(message?.source).toMatchObject({ update: true, entries: [{ name: 'files', tools: ['read'] }] })
+    const text = message?.content[0]?.type === 'text' ? message.content[0].text : ''
+    expect(text).toContain('SECOND')
+    expect(text).toContain('<removed_tools')
+    expect(text).toContain('identifier="web_search" names="web_search"')
+    expect(text).toContain('identifier="files" names="write"')
+  })
+
+  it('does not name an entry that merely left the discovery list by activation', () => {
+    const publisher = createCatalogPublisher()
+    const { agent, land } = fakeAgent()
+    const files = { name: 'files', description: 'File utilities', tools: ['read', 'write'] }
+    publisher.prepare(agent, publication('FIRST', [files], [files]))
+    land(publisher.publish(agent)!)
+    publisher.prepare(agent, publication('SECOND', [], [files]))
+
+    const message = publisher.publish(agent)
+
+    expect(message?.source).toMatchObject({ update: true })
+    const text = message?.content[0]?.type === 'text' ? message.content[0].text : ''
+    expect(text).not.toContain('<removed_tools')
+  })
+
+  it('does not loop on its own removed-entries tail', () => {
+    const publisher = createCatalogPublisher()
+    const { agent, land } = fakeAgent()
+    publisher.prepare(agent, publication('FIRST', [{ name: 'gone', description: 'Left the catalog', tools: ['x'] }]))
+    land(publisher.publish(agent)!)
+    publisher.prepare(agent, publication('SECOND', []))
+    land(publisher.publish(agent)!)
+
+    expect(publisher.publish(agent)).toBeUndefined()
+  })
+
+  it('judges entries without member names at the identifier level only', () => {
+    expect(removedCatalogEntries([{ name: 'old', description: 'Legacy entry' } as CatalogEntry], [])).toEqual([
+      { identifier: 'old', names: [] },
+    ])
   })
 })

@@ -166,4 +166,42 @@ describe('groups editor', () => {
     expect(screen.queryByLabelText('write')).toBeNull()
     expect(screen.getByLabelText('pwsh')).toBeTruthy()
   })
+
+  it('annotates the members a plugin left behind and removes them in one click', () => {
+    const onChange = renderEditor(
+      [group({ tools: ['read', 'gone'] })],
+      { uninstalledTools: ['gone'] },
+    )
+
+    expect(screen.getByText('已卸载 1 个：gone（所属插件可能已被移除）')).toBeTruthy()
+    expect(document.querySelector('.dsh-tool-activator-choice-missing')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '移除已卸载成员' }))
+    expect((onChange.mock.calls[0]![0] as ToolGroupDraft[])[0]!.tools).toEqual(['read'])
+  })
+
+  it('keeps a fully-uninstalled group local and says why', () => {
+    const onBlocked = vi.fn()
+    const onChange = renderEditor(
+      [group({ tools: ['gone_a', 'gone_b'] })],
+      { uninstalledTools: ['gone_a', 'gone_b'], onBlocked },
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '移除已卸载成员' }))
+    expect((onChange.mock.calls[0]![0] as ToolGroupDraft[])[0]!.tools).toEqual([])
+    expect(onBlocked.mock.calls[0]![0]).toContain('空分组不会被保存')
+  })
+
+  it('does not annotate members while nothing is uninstalled', () => {
+    renderEditor([group({ tools: ['read'] })], { uninstalledTools: [] })
+
+    expect(screen.queryByText(/已卸载/)).toBeNull()
+    expect(document.querySelector('.dsh-tool-activator-choice-missing')).toBeNull()
+  })
+
+  it('disables the removal button while the page is read-only', () => {
+    renderEditor([group({ tools: ['read', 'gone'] })], { uninstalledTools: ['gone'], disabled: true })
+
+    expect(screen.getByRole('button', { name: '移除已卸载成员' })).toHaveProperty('disabled', true)
+  })
 })

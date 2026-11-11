@@ -51,7 +51,15 @@ export function activatedToolsPrompts(catalog: readonly ToolCatalogItem[], enabl
  * `<available_tools>` directory lists.
  */
 export function catalogEntries(catalog: readonly ToolCatalogItem[], enabledNames: ReadonlySet<string>): CatalogEntry[] {
-  return availableToolsForDiscovery(catalog, enabledNames).map(entry => ({ name: entry.identifier, description: entry.description }))
+  return availableToolsForDiscovery(catalog, enabledNames).map(entry => ({ name: entry.identifier, description: entry.description, tools: entry.tools.map(tool => tool.name) }))
+}
+
+/**
+ * 全量目录的成员表（含已激活条目）。目录可选列表随激活缩小，「消失」若
+ * 以它判定，会把刚激活的条目误报成已卸载；判定只认这份全量表。
+ */
+export function catalogMemberships(catalog: readonly ToolCatalogItem[]): CatalogEntry[] {
+  return catalog.map(entry => ({ name: entry.identifier, description: entry.description, tools: entry.tools.map(tool => tool.name) }))
 }
 export function activatorSystemPrompt(skillAvailable: boolean): string {
   const sections = [
@@ -139,6 +147,7 @@ export function preparePromptAssembly(assembly: AssembledPrompt, catalog: readon
     catalog: {
       text: activationPrompt(prepared, catalog, policy, enabledNames, skillInstructions),
       entries: catalogEntries(catalog, enabledNames),
+      members: catalogMemberships(catalog),
     },
   }
 }

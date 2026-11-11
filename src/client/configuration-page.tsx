@@ -6,9 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME } from '../constants'
 import { Collapsible } from './collapsible'
 import { CLASSES, GROUPS_WRITE_DELAY_MS } from './constants'
-import { groupsSavable } from './groups'
+import { groupsSavable, missingMembers } from './groups'
 import { GroupsEditor } from './groups-editor'
-import { ToolActivatorSwitch, ToolActivatorTag, ToolActivatorTooltip } from './primitives'
+import { ToolActivatorButton, ToolActivatorSwitch, ToolActivatorTag, ToolActivatorTooltip } from './primitives'
 import { createSerialWriteQueue } from './write-queue'
 
 interface SettingRowProps {
@@ -286,6 +286,17 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     [catalog],
   )
 
+  // 缺失判定由宿主端随 catalog 下发，页面只做交集：基础工具里挂着的已卸载
+  // 名字在这里点名，分组成员的标注在编辑器里做。
+  const uninstalledTools = useMemo(() => catalog?.uninstalledToolNames ?? [], [catalog])
+  const missingBasic = useMemo(
+    () => missingMembers(draft.basicTools, uninstalledTools),
+    [draft.basicTools, uninstalledTools],
+  )
+  const removeMissingBasic = useCallback((): void => {
+    commitDraft(prev => ({ ...prev, basicTools: prev.basicTools.filter(tool => !missingBasic.includes(tool)) }), ['basicTools'])
+  }, [commitDraft, missingBasic])
+
   const partition = useMemo(() => {
     const entries = catalog?.entries ?? []
     const baseTools = catalog?.baseTools ?? []
@@ -425,6 +436,24 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                 {partition.active.length === 0
                   ? <p className={CLASSES.help}>当前没有默认激活的工具。</p>
                   : renderRows(partition.active)}
+                {missingBasic.length > 0
+                  ? (
+                      <>
+                        {missingBasic.map(tool => (
+                          <div className={CLASSES.row} key={tool}>
+                            <span className={CLASSES.rowText}>
+                              <span className={`${CLASSES.rowName} ${CLASSES.choiceMissing}`}>{tool}</span>
+                              <span className={CLASSES.missingNote}>已卸载（所属插件可能已被移除；按会话注册的工具在会话运行时恢复）</span>
+                            </span>
+                          </div>
+                        ))}
+                        <div className={CLASSES.toolbar}>
+                          <span className={CLASSES.missingNote}>{`基础工具里已卸载 ${missingBasic.length} 个：${missingBasic.join('、')}`}</span>
+                          <ToolActivatorButton disabled={readOnly} onClick={removeMissingBasic} size="sm" variant="outline">移除已卸载的基础工具</ToolActivatorButton>
+                        </div>
+                      </>
+                    )
+                  : null}
               </Collapsible>
               <Collapsible
                 label={`已安装但需先激活（${partition.pending.length} 个）`}
@@ -447,6 +476,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                   onBlocked={(tool: string) => setFailure(`工具 ${tool} 已属于默认激活或其他分组，不能再加入这一组。`)}
                   onChange={applyGroups}
                   toolNames={(catalog.entries ?? []).flatMap(entry => entry.tools)}
+                  uninstalledTools={uninstalledTools}
                 />
               </section>
             </>

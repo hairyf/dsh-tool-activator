@@ -24,7 +24,7 @@ import { emptyActivationHistory, foldActivationEvent, mergeActivation } from './
 import { createCatalogPublisher } from './injection'
 import { immediateToolNames, preparePromptAssembly } from './prompt'
 import { provideToolActivatorRemote } from './remote'
-import { ActivatorExecutionRuntime } from './runtime'
+import { ActivatorExecutionRuntime, explainNotFound } from './runtime'
 import { loadToolSdkRenderers } from './sdk-render'
 import { createActivatorTool, createGroupingTool } from './tool'
 import './session-projection'
@@ -599,7 +599,13 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     const runtime = new ActivatorExecutionRuntime({
       getActiveIdentifiers: identifiers => active.filter(identifier => identifiers.includes(identifier)),
       getToolManifests: async identifiers => catalog.filter(entry => identifiers.includes(entry.identifier)),
-      markActivated: () => {},
+      markActivated: () => { },
+      // 陈旧标识符值得拿到原因而不是一句 not found：配置中的分组分支正是
+      // 插件被卸载的场景。
+      explainNotFound: identifier => explainNotFound(identifier, {
+        activatedToolIds: history.activatedToolIds,
+        groups: new Set(policy.groups.map(group => group.identifier)),
+      }),
       ...(enabled.has('skill') && skillDefinition && skillService
         ? {
             activateSkill: async ({ name }: { name: string }): Promise<ActivationResult> => {
