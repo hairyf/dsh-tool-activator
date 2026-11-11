@@ -1,7 +1,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval/types'
-import type { ActivatedSkillInfo, ActivationEnvelope, ActivationHistory, ActivationReceipt } from './types'
+import type { ActivatedSkillInfo, ActivationEnvelope, ActivationHistory, ActivationReceipt, ReleasedEntry } from './types'
 import { MessageId, ToolCallId } from '@deepseek-ai/dsh-llm/brand'
 import { SessionSeq } from '@deepseek-ai/dsh-session/types'
 import { ApprovalRequestId } from '@deepseek-ai/dsh-user-approval/types'
@@ -122,6 +122,33 @@ function userEvent(text: string): SessionEvent<'user/message'> {
     surfaceOp: 'append',
     data: { id: MessageId('user:1'), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] },
   }
+}
+
+/** The catalog message of this plugin, carrying the release records. */
+function catalogEvent(released: readonly ReleasedEntry[]): SessionEvent<'user/message'> {
+  return {
+    type: 'user/message',
+    seq: SessionSeq(4),
+    time: 1004,
+    surfaceOp: 'append',
+    data: {
+      id: MessageId('user:catalog'),
+      role: 'user',
+      source: { kind: 'tool-activator', form: 'catalog', entries: [], released },
+      content: [{ type: 'text', text: 'CATALOG' }],
+    },
+  }
+}
+
+/** The receipt a release call answers with. */
+function releaseResult(identifiers: string[], toolNames: string[]): ContentBlock[] {
+  return text({
+    success: true,
+    released: { identifiers, toolNames },
+    refused: [],
+    notFound: [],
+    alreadyReleased: [],
+  })
 }
 
 function turnEnd(): SessionEvent<'turn/end'> {
@@ -921,5 +948,77 @@ describe('foldActivationEvent declared snapshots and replay', () => {
     expectHistory(checkpoint, { activatedToolIds: [], activatedSkills: [], pendingCalls: [], approvedCalls: ['run:leaf:activate'], pendingActivations: [{ callId: 'run:leaf:activate', parentCallId: 'run:leaf', activation }] })
     expectHistory(fold(tail, checkpoint), { activatedToolIds: ['files'], activatedSkills: [], pendingCalls: [] })
     expect(fold(tail, checkpoint)).toEqual(fold([...prefix, ...tail]))
+  })
+})
+
+/**
+ * A release is a subtraction: the fold takes the released identifiers and names
+ * out of the activation account and never decides what should have been
+ * released.
+ */
+describe('the release fold', () => {
+  const records: ReleasedEntry[] = [{ identifier: 'files', names: ['read', 'write'], reason: { kind: 'active', text: 'The files are not needed any more' } }]
+
+  function account(): ActivationHistory {
+    return mergeActivation(emptyActivationHistory(), {
+      ...envelope(['files']),
+      state: {
+        activatedTools: [{ identifier: 'files', name: 'files', apiCount: 1, tools: ['read', 'write'] }],
+        activatedSkills: [],
+        alreadyActive: [],
+        notFound: [],
+      },
+    })
+  }
+
+  it('takes the released identifiers and names out of the activation account', () => {
+    const before = account()
+    expect(before.activatedToolIds).toEqual(['files'])
+
+    const after = fold([catalogEvent(records)], before)
+    expect(after.activatedToolIds).toEqual([])
+    expect(after.activatedToolNames ?? []).toEqual([])
+  })
+
+  it('applies the release the tool result carries', () => {
+    const after = fold([
+      callEvent('release-call', 'deactivate_tools', JSON.stringify({ identifiers: ['files'], reason: 'The files are not needed any more' })),
+      resultEvent('release-call', releaseResult(['files'], ['read', 'write'])),
+    ], account())
+    expect(after.activatedToolIds).toEqual([])
+    expect(after.activatedToolNames ?? []).toEqual([])
+  })
+
+  it('is a subtraction: the same record folded twice changes nothing', () => {
+    const once = fold([catalogEvent(records)], account())
+    const twice = fold([catalogEvent(records)], once)
+    expect(twice).toEqual(once)
+  })
+})
+
+/**
+ * Decision 13 keeps skill releases out of v1: a skill activation hands the
+ * model instructions rather than a schema, so there is nothing to release yet.
+ * The field is reserved for that separate column, and the fold leaves it be.
+ */
+describe('the reserved skill release field', () => {
+  const skillReleases: ReleasedEntry[] = [{ identifier: 'safe-skill', names: ['skill'], reason: { kind: 'active', text: 'The skill is not needed any more' } }]
+
+  it('is carried along without changing what the fold decides', () => {
+    const events = [
+      callEvent('call:1'),
+      resultEvent('call:1', text(receipt('call:1'))),
+    ]
+    const withField = fold(events, { ...emptyActivationHistory(), skillReleases })
+    const withoutField = fold(events)
+
+    // The reserved field changes nothing the fold decides.
+    expect(withField.activatedToolIds).toEqual(withoutField.activatedToolIds)
+    expect(withField.activatedToolNames).toEqual(withoutField.activatedToolNames)
+    expect(withField.activatedSkills).toEqual(withoutField.activatedSkills)
+    // It travels along untouched, and the projection schema has to keep it.
+    expect(withField.skillReleases).toEqual(skillReleases)
+    expect(withoutField.skillReleases).toBeUndefined()
+    expect(activationHistorySchema.parse(withField).skillReleases).toEqual(skillReleases)
   })
 })

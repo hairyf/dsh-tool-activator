@@ -1,6 +1,6 @@
 import type { ToolGroupDraft } from './types'
 import { describe, expect, it } from 'vitest'
-import { groupChoices, groupsSavable, toolClaimable } from './groups'
+import { groupChoices, groupsSavable, missingMembers, toolClaimable } from './groups'
 
 function group(overrides: Partial<ToolGroupDraft> = {}): ToolGroupDraft {
   return { identifier: 'files', name: 'Files', description: '', tools: [], sections: [], ...overrides }
@@ -74,5 +74,15 @@ describe('toolClaimable', () => {
 
     expect(toolClaimable('read', [], owned, 0, [])).toBe(true)
     expect(toolClaimable('read', [], owned, 1, [])).toBe(false)
+  })
+})
+
+describe('missingMembers', () => {
+  it('keeps the configured order and only reports the uninstalled ones', () => {
+    expect(missingMembers(['read', 'gone', 'write'], ['gone', 'elsewhere'])).toEqual(['gone'])
+  })
+
+  it('reports nothing without a missing list', () => {
+    expect(missingMembers(['read'], [])).toEqual([])
   })
 })

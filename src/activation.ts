@@ -2,6 +2,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ActivationEnvelope, ActivationHistory, ActivationReceipt, ActivationResult } from './types'
 import { z } from 'zod'
 import { ACTIVATION_PRODUCER, ACTIVATION_VERSION } from './constants'
+import { releasedEntrySchema } from './release'
 
 export const activatedSkillSchema = z.object({
   id: z.string(),
@@ -51,13 +52,35 @@ export const activationHistorySchema = z.object({
   activatedToolIds: z.array(z.string()),
   activatedToolNames: z.array(z.string()).optional(),
   activatedSkills: z.array(activatedSkillSchema),
+  // Decision 13 keeps skill releases out of v1; the field is reserved, so the
+  // schema has to carry it instead of stripping it.
+  skillReleases: z.array(releasedEntrySchema).optional(),
   pendingCalls: z.array(z.string()),
   pendingActivations: z.array(z.object({ callId: z.string(), parentCallId: z.string(), activation: activationReceiptSchema })).optional(),
   pendingRequests: z.array(z.object({ callId: z.string(), identifiers: z.array(z.string()) })).optional(),
   approvalRequests: z.array(z.object({ id: z.string(), callId: z.string() })).optional(),
   approvedCalls: z.array(z.string()).optional(),
   pendingGroupingCalls: z.array(z.string()).optional(),
+  pendingDeactivateCalls: z.array(z.string()).optional(),
 }) satisfies z.ZodType<ActivationHistory>
+
+const requestSchema = z.object({ identifiers: z.array(z.string()), reason: z.string() })
+
+/**
+ * The identifiers an activation call asked for.
+ *
+ * The arguments are the raw JSON the model produced, so they are read
+ * defensively: a call that is not an activation call names no identifiers.
+ */
+export function requestedIdentifiers(value: unknown): string[] | undefined {
+  try {
+    const parsed = requestSchema.safeParse(typeof value === 'string' ? JSON.parse(value) : value)
+    return parsed.success ? parsed.data.identifiers : undefined
+  }
+  catch {
+    return undefined
+  }
+}
 
 function sanitizeEnvelope(value: ActivationEnvelope): ActivationEnvelope {
   return {

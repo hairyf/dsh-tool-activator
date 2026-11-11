@@ -1,8 +1,9 @@
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
-import type { ActivateToolsParams, ActivationEnvelope, GroupingToolParams, GroupingToolResult } from './types'
+import type { ActivateToolsParams, ActivationEnvelope, DeactivateToolsParams, GroupingToolParams, GroupingToolResult, ReleaseReceipt } from './types'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { activationContent } from './activation'
-import { ACTIVATION_PRODUCER, ACTIVATION_VERSION, ACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME } from './constants'
+import { ACTIVATION_PRODUCER, ACTIVATION_VERSION, ACTIVATOR_TOOL_NAME, DEACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME } from './constants'
+import { releaseContent } from './release'
 
 export function createActivatorTool(execute: (args: ActivateToolsParams, exec: ToolRunContext) => Promise<ActivationEnvelope>): ToolDefinition {
   return defineTool({
@@ -75,6 +76,70 @@ export function createActivatorTool(execute: (args: ActivateToolsParams, exec: T
         },
       },
       render: (_args, value) => activationContent(value),
+      presentationMeta: (_args, value) => value,
+    },
+    execute,
+  })
+}
+
+/**
+ * The release tool: it gives the session's tool set back the entries the model
+ * no longer needs.
+ *
+ * The description carries the rules the model cannot guess: a group is
+ * released by its identifier, a bare tool name only when no activated group
+ * provides it, and the always-loaded tools are out of reach. Releasing needs no
+ * approval: it only ever takes schemas away.
+ */
+export function createDeactivatorTool(execute: (args: DeactivateToolsParams, exec: ToolRunContext) => Promise<ReleaseReceipt>): ToolDefinition {
+  return defineTool({
+    name: DEACTIVATOR_TOOL_NAME,
+    description: 'Release the tools this session activated so their schemas stop occupying the context. Call it once with the identifiers of the entries you no longer need and a concise reason. A group is released by its identifier; a tool name may be released on its own only when no activated group provides it, and is refused otherwise. The basic tools, the locked tools and the catalog tools themselves cannot be released. Releasing an entry that is not activated succeeds without changing anything, so a retry is harmless.',
+    parameters: {
+      identifiers: {
+        type: 'array',
+        items: { type: 'string' },
+        required: true,
+        description: 'Exact identifiers of the activated entries, or the tool names that no activated group provides.',
+      },
+      reason: {
+        type: 'string',
+        required: true,
+        description: 'A concise explanation of why these tools are no longer needed.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          success: { type: 'boolean', required: true },
+          released: {
+            type: 'object',
+            additionalProperties: false,
+            required: true,
+            properties: {
+              identifiers: { type: 'array', items: { type: 'string' }, required: true },
+              toolNames: { type: 'array', items: { type: 'string' }, required: true },
+            },
+          },
+          refused: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                identifier: { type: 'string', required: true },
+                reason: { type: 'string', required: true },
+              },
+            },
+          },
+          notFound: { type: 'array', items: { type: 'string' }, required: true },
+          alreadyReleased: { type: 'array', items: { type: 'string' }, required: true },
+        },
+      },
+      render: (_args, value) => releaseContent(value),
       presentationMeta: (_args, value) => value,
     },
     execute,

@@ -1,10 +1,22 @@
 import type { ContextForm } from '@deepseek-ai/dsh-llm'
 
 export const ACTIVATOR_TOOL_NAME = 'activate_tools'
+export const DEACTIVATOR_TOOL_NAME = 'deactivate_tools'
 export const RUN_CODE_TOOL_NAME = 'run_code'
 export const GROUPING_TOOL_NAME = 'group_tools'
 /** Tools no group may ever claim, whatever the configuration says. */
-export const LOCKED_TOOL_NAMES: readonly string[] = [ACTIVATOR_TOOL_NAME, RUN_CODE_TOOL_NAME, GROUPING_TOOL_NAME]
+export const LOCKED_TOOL_NAMES: readonly string[] = [ACTIVATOR_TOOL_NAME, DEACTIVATOR_TOOL_NAME, RUN_CODE_TOOL_NAME, GROUPING_TOOL_NAME]
+/**
+ * The tools that are always in the model's face: the two that manage the
+ * catalog and the one that runs the SDK. They are never part of the directory
+ * the model activates from, and they are never deferred in the request head.
+ */
+export const ALWAYS_PRESENT_TOOL_NAMES: readonly string[] = [ACTIVATOR_TOOL_NAME, DEACTIVATOR_TOOL_NAME, RUN_CODE_TOOL_NAME]
+/**
+ * Why an entry left the session's activated set: the model's own decision, the
+ * idle policy, or the cap. The kind is the one vocabulary the reason shares.
+ */
+export const RELEASE_REASON_KINDS = ['active', 'idle', 'cap'] as const
 /**
  * The config schema's identifier pattern; the engine rejects anything it would
  * refuse. The schema and the engine share one pattern, so a group the model
@@ -35,7 +47,7 @@ export const ACTIVATION_VERSION = 1
  * rows written by an older fold are discarded and recomputed from the session
  * log instead of being applied forward into a state they do not describe.
  */
-export const ACTIVATION_STATE_VERSION = 2
+export const ACTIVATION_STATE_VERSION = 3
 export const ACTIVATION_PROJECTION_KEY = 'tool-activator:activation'
 export const SETTINGS_REMOTE_NAMESPACE = 'toolActivator'
 

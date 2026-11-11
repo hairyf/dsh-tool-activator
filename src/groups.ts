@@ -65,6 +65,26 @@ export function groupingSnapshot(facts: GroupingFacts): GroupingSnapshot {
 }
 
 /**
+ * 配置里仍挂着、但当前作用域已不存在的工具名。判定与 `groupingSnapshot` 的
+ * missing 同一口径（installed = facts.tools），配置页的宿主端判定走这里，
+ * 不另起第二套口径。
+ */
+export function missingToolNames(facts: Pick<GroupingFacts, 'groups' | 'tools' | 'basicTools'>): string[] {
+  const installed = new Set(facts.tools)
+  const missing = new Set<string>()
+  for (const group of facts.groups) {
+    for (const tool of group.tools) {
+      if (!installed.has(tool))
+        missing.add(tool)
+    }
+  }
+  for (const tool of facts.basicTools) {
+    if (!installed.has(tool))
+      missing.add(tool)
+  }
+  return [...missing].sort(byName)
+}
+/**
  * The result of applying a batch of grouping operations: the state the batch
  * would produce, every problem it has, and the receipt of what it changed.
  */

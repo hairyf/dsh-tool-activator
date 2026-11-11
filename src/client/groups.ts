@@ -60,3 +60,12 @@ export function groupChoices(
   const available = toolNames.filter(tool => !members.includes(tool) && toolClaimable(tool, basicTools, groups, index, locked))
   return [...members, ...available]
 }
+
+/**
+ * 卡片成员里已卸载的那些，保持配置顺序。判定由宿主端随 catalog 下发，组件
+ * 只做交集，不在浏览器里另起一套「安装了没有」的口径。
+ */
+export function missingMembers(tools: readonly string[], uninstalled: readonly string[]): string[] {
+  const gone = new Set(uninstalled)
+  return tools.filter(tool => gone.has(tool))
+}

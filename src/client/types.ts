@@ -43,6 +43,19 @@ export interface ToolGroupDraft {
 }
 
 /**
+ * The passive release block as the settings page edits it. The two counts
+ * are the raw text of the inputs: a value the Host would refuse stays a local
+ * draft instead of bouncing off the config schema.
+ */
+export interface PassiveReleaseDraft {
+  enabled: boolean
+  /** The idle turn count, as typed. */
+  idleTurns: string
+  /** The cap on the activated tools of one session, as typed. */
+  maxActivatedTools: string
+}
+
+/**
  * The page's authoritative draft of the fields it edits. It leads the Host
  * document between a click and the echo of its write, so every control reads
  * and writes this instead of the last rendered closure.
@@ -51,6 +64,7 @@ export interface ConfigurationDraft {
   basicTools: string[]
   requireApproval: boolean | undefined
   autoGroupMcp: boolean | undefined
+  passiveRelease: PassiveReleaseDraft
   groups: ToolGroupDraft[] | undefined
 }
 
@@ -74,6 +88,8 @@ export interface GroupsEditorProps {
   onBlocked?: (tool: string) => void
   /** Every tool name the catalog knows, so a group can only reference real tools. */
   toolNames: readonly string[]
+  /** 已卸载的工具名（宿主端判定随 catalog 下发）；缺省视为没有缺失成员。 */
+  uninstalledTools?: readonly string[]
   onChange: (next: ToolGroupDraft[]) => void
 }
 

@@ -2,7 +2,7 @@ import type { GroupingFacts } from './groups'
 import type { ToolGroup } from './shared'
 import type { GroupView } from './types'
 import { describe, expect, it } from 'vitest'
-import { applyGroupOps, groupingSnapshot } from './groups'
+import { applyGroupOps, groupingSnapshot, missingToolNames } from './groups'
 
 const LOCKED = ['activate_tools', 'group_tools', 'run_code']
 
@@ -411,5 +411,23 @@ describe('applyGroupOps', () => {
 
     expect(outcome.problems.map(problem => problem.kind)).toEqual(['invalid-identifier', 'empty-tools', 'description-too-long'])
     expect(outcome.problems.map(problem => problem.opIndex)).toEqual([0, 0, 0])
+  })
+})
+
+describe('missingToolNames', () => {
+  it('collects the configured names the scope no longer offers', () => {
+    expect(missingToolNames({
+      groups: [group('files', ['read', 'gone_a']), group('audio', ['gone_b'])],
+      tools: ['read', 'write'],
+      basicTools: ['gone_c', 'read'],
+    })).toEqual(['gone_a', 'gone_b', 'gone_c'])
+  })
+
+  it('returns nothing while every configured member is still installed', () => {
+    expect(missingToolNames({
+      groups: [group('files', ['read'])],
+      tools: ['read', 'write'],
+      basicTools: ['write'],
+    })).toEqual([])
   })
 })

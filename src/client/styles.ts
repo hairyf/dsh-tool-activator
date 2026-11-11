@@ -43,9 +43,12 @@ const CSS = `
 .${CLASSES.fieldLabel}{color:var(--dsw-alias-label-secondary,inherit);font-size:12px}
 .${CLASSES.choices}{display:flex;flex-wrap:wrap;gap:4px 12px;max-height:160px;overflow:auto}
 .${CLASSES.choice}{font-size:12px}
+.${CLASSES.choiceMissing}{opacity:.55;text-decoration:line-through}
+.${CLASSES.missingNote}{color:var(--dsw-alias-state-warning-primary,#ad5f00);font-size:12px;overflow-wrap:anywhere}
 .${CLASSES.toolbar}{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .dsh-tool-activator-input{box-sizing:border-box;width:100%;min-width:0;height:28px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l4,rgba(127,127,127,.3));border-radius:8px;color:var(--dsw-alias-label-primary,inherit);background:var(--dsw-alias-bg-layer-1,transparent);font:inherit;font-size:12px}
 .dsh-tool-activator-input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:1px}
+.dsh-tool-activator-input:disabled,.${CLASSES.countInput}:disabled{cursor:default;opacity:.5}
 .dsh-tool-activator-checkbox{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
 .dsh-tool-activator-checkbox:has(input:disabled){cursor:default;opacity:.5}
 .dsh-tool-activator-button{display:inline-flex;align-items:center;height:28px;padding:0 10px;border:.5px solid transparent;border-radius:8px;color:var(--dsw-alias-label-primary,inherit);background:0 0;font:inherit;font-size:12px;cursor:pointer}

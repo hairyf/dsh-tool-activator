@@ -2,12 +2,15 @@ import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { ToolPolicy } from './shared'
 import type { ToolCatalogItem } from './types'
 import { validatePolicy } from './config'
-import { ACTIVATOR_TOOL_NAME, FIRST_PARTY_SECTION_TOOLS } from './constants'
+import { ALWAYS_PRESENT_TOOL_NAMES, FIRST_PARTY_SECTION_TOOLS } from './constants'
 
 export function buildToolCatalog(schemas: readonly ToolSchema[], policy: ToolPolicy): ToolCatalogItem[] {
   validatePolicy(policy)
+  // The plugin's own tools are always in the model's face, so they are no part
+  // of the directory the model activates from.
+  const ownTools = new Set(ALWAYS_PRESENT_TOOL_NAMES)
   const available = new Map(schemas
-    .filter(tool => tool.name !== ACTIVATOR_TOOL_NAME && tool.name !== 'run_code')
+    .filter(tool => !ownTools.has(tool.name))
     .map(tool => [tool.name, tool]))
   const claimed = new Set<string>()
   const entries: ToolCatalogItem[] = []
@@ -63,7 +66,7 @@ export function buildToolCatalog(schemas: readonly ToolSchema[], policy: ToolPol
 }
 
 export function enabledToolNames(catalog: readonly ToolCatalogItem[], policy: ToolPolicy, activatedIds: readonly string[], activatedToolNames: readonly string[] = []): Set<string> {
-  const enabled = new Set<string>([ACTIVATOR_TOOL_NAME, 'run_code'])
+  const enabled = new Set<string>(ALWAYS_PRESENT_TOOL_NAMES)
   const active = new Set(activatedIds)
   const activeNames = new Set(activatedToolNames)
   // The allow set is a policy/history function, not a registry snapshot: the
