@@ -6,12 +6,12 @@
   "description": "Load only basic DeepSeek Harness tools by default and activate other tools on demand.",
   "author": "Hairy <wwu710632@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/hairyf/dsh-tool-activator#readme",
+  "homepage": "https://github.com/Tranquillitatis-Lab/dsh-tool-activator#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hairyf/dsh-tool-activator.git"
+    "url": "git+https://github.com/Tranquillitatis-Lab/dsh-tool-activator.git"
   },
-  "bugs": "https://github.com/hairyf/dsh-tool-activator/issues",
+  "bugs": "https://github.com/Tranquillitatis-Lab/dsh-tool-activator/issues",
   "keywords": ["dsh-plugin", "deepseek-harness", "tools", "tool-discovery"],
   "sideEffects": false,
   "exports": {

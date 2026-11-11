@@ -21,7 +21,7 @@ describe('source distribution contracts', () => {
   it('declares the requested repository, minimum core, icon, and client owners', async () => {
     const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
     expect(manifest.name).toBe('dsh-tool-activator')
-    expect(manifest.repository.url).toBe('git+https://github.com/hairyf/dsh-tool-activator.git')
+    expect(manifest.repository.url).toBe('git+https://github.com/Tranquillitatis-Lab/dsh-tool-activator.git')
     expect(manifest.peerDependencies['@deepseek-ai/dsh']).toBe('>=0.2.0-rc.2')
     expect(manifest.icon).toBe('./icon.svg')
     expect(manifest.exports['./icon']).toBe('./icon.svg')

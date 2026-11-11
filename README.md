@@ -127,8 +127,8 @@ MIT
 [bundle-href]: https://bundlephobia.com/result?p=dsh-tool-activator
 [jsdocs-src]: https://img.shields.io/badge/jsdocs-reference-080f12?style=flat&colorA=080f12&colorB=1fa669
 [jsdocs-href]: https://www.jsdocs.io/package/dsh-tool-activator
-[license-src]: https://img.shields.io/github/license/hairyf/dsh-tool-activator.svg?style=flat&colorA=080f12&colorB=1fa669
-[license-href]: https://github.com/hairyf/dsh-tool-activator/blob/main/LICENSE.md
+[license-src]: https://img.shields.io/github/license/Tranquillitatis-Lab/dsh-tool-activator.svg?style=flat&colorA=080f12&colorB=1fa669
+[license-href]: https://github.com/Tranquillitatis-Lab/dsh-tool-activator/blob/main/LICENSE.md
 
 ## 友情链接
 
