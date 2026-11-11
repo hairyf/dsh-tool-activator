@@ -108,23 +108,3 @@ export class ActivatorExecutionRuntime {
     }
   }
 }
-
-/** not-found 解释能看到的上下文：本会话激活过什么、配置里还挂着哪些分组。 */
-export interface NotFoundExplanationContext {
-  activatedToolIds: readonly string[]
-  /** 配置里仍在的分组标识符；解释只用「在不在」，不需要成员名。 */
-  groups: ReadonlySet<string>
-}
-
-/**
- * 解释一个标识符为什么不在目录里，只讲插件能知道的部分。配置中的分组分支
- * 正是 #29 的卸载场景：持久化留住分组，成员背后的插件已不在注册面里；它
- * 不会遇到「部分存活」的情形——那样条目仍在目录里，轮不到 not-found。
- */
-export function explainNotFound(identifier: string, context: NotFoundExplanationContext): string {
-  if (context.groups.has(identifier))
-    return `Group ${identifier} is still configured, but none of its tools are in the current catalog; the plugin behind it may have been uninstalled. Remove its members from the group in the tool activator settings.`
-  if (context.activatedToolIds.includes(identifier))
-    return `${identifier} was activated earlier in this session but is no longer in the catalog; its tools may have been uninstalled, or its group renamed or removed.`
-  return `${identifier} is not in the current catalog; it may have been renamed, removed, or its tools uninstalled.`
-}

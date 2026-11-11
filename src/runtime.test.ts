@@ -1,6 +1,6 @@
 import type { ActivateToolsParams, ActivationResult, ActivatorRuntimeService, ToolCatalogItem } from './types'
 import { describe, expect, it, vi } from 'vitest'
-import { ActivatorExecutionRuntime, explainNotFound } from './runtime'
+import { ActivatorExecutionRuntime } from './runtime'
 
 const repositoryManifest: ToolCatalogItem = {
   apiDescriptions: [
@@ -441,28 +441,5 @@ describe('activatorExecutionRuntime', () => {
         success: false,
       })
     })
-  })
-})
-
-describe('explainNotFound', () => {
-  const context = {
-    activatedToolIds: ['remembered'],
-    groups: new Set(['legacy-group']),
-  }
-
-  it('points a configured group at its uninstalled plugin and the settings page', () => {
-    const explanation = explainNotFound('legacy-group', context)
-
-    expect(explanation).toContain('legacy-group')
-    expect(explanation).toContain('may have been uninstalled')
-    expect(explanation).toContain('tool activator settings')
-  })
-
-  it('tells a previously activated identifier that it left the catalog', () => {
-    expect(explainNotFound('remembered', context)).toContain('no longer in the catalog')
-  })
-
-  it('gives an unknown identifier the generic cause', () => {
-    expect(explainNotFound('never-seen', context)).toContain('not in the current catalog')
   })
 })

@@ -94,21 +94,17 @@ describe('installAdmissionGating', () => {
     expect(resolve).toHaveBeenCalledTimes(1)
   })
 
-  it('resolves the allow-list before every resolution, so the step that follows a change is the one that sees it', async () => {
+  it('stops resolving once an allow-list exists', async () => {
     const tools = new FakeTools()
     const gate = installAdmissionGating(tools)!
     const owner = agent('settled')
-    const resolve = vi.fn(() => {
-      gate.setAllowed(owner, new Set(['read']))
-    })
+    const resolve = vi.fn()
     gate.setResolver(resolve)
     gate.setAllowed(owner, new Set(['read', 'write']))
 
     const toolSet = await tools.resolve({ agent: owner })
-    // The resolver decides what this step may call, not what the last one did:
-    // a policy that reclaims an activation narrows this very admission.
-    expect([...toolSet.view(owner).keys()]).toEqual(['read'])
-    expect(resolve).toHaveBeenCalledTimes(1)
+    expect([...toolSet.view(owner).keys()]).toEqual(['read', 'write'])
+    expect(resolve).not.toHaveBeenCalled()
   })
 
   it('leaves an agent it does not manage alone', async () => {

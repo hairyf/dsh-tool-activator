@@ -1,7 +1,6 @@
 import type { ToolGroup, ToolPolicy } from './shared'
 import { describe, expect, it } from 'vitest'
 import { collectGroupProblems, Config, validatePolicy } from './config'
-import { DEFAULT_PASSIVE_RELEASE } from './shared'
 
 function parse(value: unknown): ToolPolicy {
   return Config(value as Parameters<typeof Config>[0]).get()
@@ -12,7 +11,6 @@ function policy(groups: readonly ToolGroup[]): ToolPolicy {
     basicTools: ['read'],
     requireApproval: true,
     autoGroupMcp: true,
-    passiveRelease: { ...DEFAULT_PASSIVE_RELEASE },
     groups,
     sectionTools: {},
   }
@@ -30,7 +28,6 @@ describe('config', () => {
       basicTools: ['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write'],
       requireApproval: true,
       autoGroupMcp: true,
-      passiveRelease: { enabled: true, idleTurns: 6, maxActivatedTools: 24 },
       groups: [],
       sectionTools: {},
     })
@@ -42,7 +39,6 @@ describe('config', () => {
       basicTools: [],
       requireApproval: false,
       autoGroupMcp: false,
-      passiveRelease: { enabled: true, idleTurns: 6, maxActivatedTools: 24 },
       groups: [],
       sectionTools: {},
     })
@@ -57,7 +53,6 @@ describe('config', () => {
       basicTools: ['read', 'read'],
       requireApproval: true,
       autoGroupMcp: true,
-      passiveRelease: { enabled: true, idleTurns: 6, maxActivatedTools: 24 },
       groups: [{ identifier: 'plugin.files-2', name: '', description: '', tools: ['mcp__files__read', 'not_in_current_scope'], sections: [] }],
       sectionTools: { 'plugin:files': ['mcp__files__read'], 'tool:none': [] },
     })
@@ -92,37 +87,6 @@ describe('config', () => {
 
     expect(first.basicTools).toEqual(['write'])
     expect(second.basicTools).toEqual(['read', 'glob', 'grep', 'write', 'edit', 'skill', 'ask_user_question', 'todo_write'])
-  })
-
-  it('keeps an explicit passive release policy', () => {
-    const result = parse({ passiveRelease: { enabled: false, idleTurns: 3, maxActivatedTools: 12 } })
-
-    expect(result.passiveRelease).toEqual({ enabled: false, idleTurns: 3, maxActivatedTools: 12 })
-  })
-
-  it('fills a partial passive release policy from the defaults', () => {
-    const result = parse({ passiveRelease: { enabled: false } })
-
-    expect(result.passiveRelease).toEqual({ enabled: false, idleTurns: 6, maxActivatedTools: 24 })
-  })
-
-  it.each([
-    { idleTurns: 0 },
-    { idleTurns: -1 },
-    { idleTurns: 1.5 },
-    { idleTurns: '6' },
-    { maxActivatedTools: 0 },
-    { maxActivatedTools: 2.5 },
-    { maxActivatedTools: '24' },
-  ])('rejects a passive release count that is not a whole number of at least one %j', (block) => {
-    expect(() => parse({ passiveRelease: block })).toThrow()
-  })
-
-  it('accepts a passive release cap larger than the number of installed tools', () => {
-    // The cap is lazy: a limit above the tool count simply never triggers.
-    const result = parse({ passiveRelease: { maxActivatedTools: 9999 } })
-
-    expect(result.passiveRelease.maxActivatedTools).toBe(9999)
   })
 })
 

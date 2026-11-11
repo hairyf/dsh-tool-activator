@@ -1,8 +1,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ToolSchema, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
-import type { RELEASE_REASON_KINDS } from './constants'
-import type { ToolGroup, ToolPolicy } from './shared'
+import type { ToolGroup } from './shared'
 
 /** One entry of the tool catalog: what the model can still activate. */
 export interface CatalogEntry {
@@ -10,8 +9,6 @@ export interface CatalogEntry {
   name: string
   /** What this entry covers, in one line. */
   description: string
-  /** Member names this entry carries, so a republication can name what left it. */
-  tools: string[]
 }
 
 /** One publication of the tool catalog. */
@@ -20,13 +17,6 @@ export interface CatalogPublication {
   text: string
   /** The entries still available in this session, in catalog order. */
   entries: readonly CatalogEntry[]
-  /**
-   * 全量目录的成员表（含已激活条目）。publisher 用它判定「消失」：条目只是
-   * 被激活而离开可选目录时，它还在这里，不会被误报成已卸载。
-   */
-  members: readonly CatalogEntry[]
-  /** The entries this session released since the last publication. */
-  released?: readonly ReleasedEntry[]
 }
 
 /**
@@ -39,16 +29,7 @@ export interface CatalogPublication {
  */
 export type ActivatorMessageSource
   = | { readonly kind: 'tool-activator' }
-    | {
-      readonly kind: 'tool-activator'
-      readonly form: 'catalog'
-      readonly entries: readonly CatalogEntry[]
-      /** 全量成员表，供下一次发布判定「已消失」。 */
-      readonly members?: readonly CatalogEntry[]
-      /** The entries this session released, so a consumer can show what left the set. */
-      readonly released?: readonly ReleasedEntry[]
-      readonly update?: true
-    }
+    | { readonly kind: 'tool-activator', readonly form: 'catalog', readonly entries: readonly CatalogEntry[], readonly update?: true }
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -75,51 +56,6 @@ export interface CatalogPublisher {
 }
 
 export interface ActivateToolsParams {
-  identifiers: string[]
-  reason: string
-}
-
-/** Why an entry left the session's activated set. */
-export type ReleaseReasonKind = typeof RELEASE_REASON_KINDS[number]
-
-export interface ReleaseReason {
-  /** `active` is the model's own decision; `idle` and `cap` are the passive policy. */
-  kind: ReleaseReasonKind
-  /** The words the model (or the policy) gave for the release. */
-  text?: string
-}
-
-/** One entry this session released, as the catalog message carries it. */
-export interface ReleasedEntry {
-  /** The identifier the entry was activated and released by. */
-  identifier: string
-  /** The tool names the release took out of the session's enabled set. */
-  names: string[]
-  reason: ReleaseReason
-}
-
-/**
- * What one release call did: the entries it took out of the session, the ones it
- * refused, and the ones that were not activated to begin with.
- */
-export interface ReleaseReceipt {
-  /** True when a release took effect, or when every name it named was already released. */
-  success: boolean
-  released: {
-    /** The identifiers the session released. */
-    identifiers: string[]
-    /** The tool names the release took out of the enabled set. */
-    toolNames: string[]
-  }
-  /** The names the session may not release, each with the reason why. */
-  refused: Array<{ identifier: string, reason: string }>
-  /** The identifiers this scope does not know at all. */
-  notFound: string[]
-  /** The identifiers that were not activated, so the release changed nothing. */
-  alreadyReleased: string[]
-}
-
-export interface DeactivateToolsParams {
   identifiers: string[]
   reason: string
 }
@@ -218,60 +154,6 @@ export interface ActivationReceipt extends ActivationEnvelope {
   commit: ActivationCommit
 }
 
-/**
- * The idle clock of one session.
- *
- * The clock is a function of the session log alone: it says which turn each
- * tool was last used on. That is what makes the passive policy replayable —
- * a restored session continues with the clock its log describes, and the same
- * log always produces the same clock.
- */
-export interface IdleClock {
-  /** The highest turn the log reached: the turn the session is in now. */
-  currentTurn: number
-  /** The turn each tool name was last called on. */
-  calls: Map<string, number>
-  /** The turn each identifier was last activated on by a committed activation. */
-  activations: Map<string, number>
-  /** The turn each tool name was last activated on. */
-  activatedNames: Map<string, number>
-  /** The highest turn a step of the log has closed on: 0 before any step ended. */
-  closedStepTurn: number
-}
-
-/**
- * What this session released and has not activated again.
- *
- * The projected account folds on its own schedule, so a release has to be
- * remembered on its own: without this baseline the next assembly would hand the
- * tools back before the fold caught up.
- */
-export interface ReleasedBaseline {
-  /** The identifiers that were released. */
-  identifiers: Set<string>
-  /** The tool names that were released. */
-  names: Set<string>
-}
-
-/**
- * The account of one session: what it may call, what it holds and how long it
- * has held it.
- *
- * Every passive policy and the release decision are read from this one set of
- * facts, so they cannot drift apart.
- */
-export interface SessionAccount {
-  /** The catalog of this session's scope. */
-  catalog: readonly ToolCatalogItem[]
-  /** The configuration of the moment. */
-  policy: ToolPolicy
-  /** What the session activated. */
-  history: ActivationHistory
-  /** Which turn each tool was last used on. */
-  clock: IdleClock
-  /** What this session already released. */
-  released?: ReleasedBaseline
-}
 export interface ActivationHistory {
   activatedToolIds: string[]
   /**
@@ -281,12 +163,6 @@ export interface ActivationHistory {
    */
   activatedToolNames?: string[]
   activatedSkills: ActivatedSkillInfo[]
-  /**
-   * Decision 13: a skill activation hands the model instructions rather than a
-   * schema, so v1 does not release one. The field is reserved for that separate
-   * column: nothing writes it and nothing reads it yet.
-   */
-  skillReleases?: ReleasedEntry[]
   pendingCalls: string[]
   pendingActivations?: Array<{ callId: string, parentCallId: string, activation: ActivationReceipt }>
   pendingRequests?: Array<{ callId: string, identifiers: string[] }>
@@ -298,12 +174,6 @@ export interface ActivationHistory {
    * carries no tool name.
    */
   pendingGroupingCalls?: string[]
-  /**
-   * Calls of the release tool whose result has not been folded yet. The fold
-   * needs them to tell a release result from any other tool result, which
-   * carries no tool name of its own.
-   */
-  pendingDeactivateCalls?: string[]
 }
 
 export interface ActivationCommit {
@@ -328,11 +198,6 @@ export interface ActivationCatalog {
   entries: ActivationCatalogEntry[]
   groups: ToolGroup[]
   requireApproval: boolean
-  /**
-   * 工具名集合：分组或基础工具里仍配置着、但当前真实工具面已不存在的名字，
-   * 宿主端判定，配置页据此标注缺失成员。可选：旧宿主的返回没有这个字段。
-   */
-  uninstalledToolNames?: string[]
 }
 
 /**

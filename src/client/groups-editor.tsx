@@ -3,7 +3,7 @@ import type { GroupsEditorProps, ToolGroupDraft } from './types'
 import { useState } from 'react'
 import { Collapsible } from './collapsible'
 import { CLASSES, GROUP_IDENTIFIER_PATTERN } from './constants'
-import { groupChoices, missingMembers, toolClaimable } from './groups'
+import { groupChoices, toolClaimable } from './groups'
 import { ToolActivatorButton, ToolActivatorCheckbox, ToolActivatorInput } from './primitives'
 
 function emptyGroup(): ToolGroupDraft {
@@ -15,7 +15,7 @@ function emptyGroup(): ToolGroupDraft {
  * plus the real tools it bundles, so tools are picked from the live catalog
  * instead of being typed by hand.
  */
-export function GroupsEditor({ basicTools, disabled, groups, lockedTools, onBlocked, toolNames, uninstalledTools, onChange }: GroupsEditorProps): ReactElement {
+export function GroupsEditor({ basicTools, disabled, groups, lockedTools, onBlocked, toolNames, onChange }: GroupsEditorProps): ReactElement {
   // Only the later card of a repeated identifier is flagged: the first one is
   // the definition the duplicate collides with.
   const duplicates = new Set<number>()
@@ -65,8 +65,6 @@ export function GroupsEditor({ basicTools, disabled, groups, lockedTools, onBloc
         const invalid = group.identifier === '' || !GROUP_IDENTIFIER_PATTERN.test(group.identifier)
         const duplicate = !invalid && duplicates.has(index)
         const filter = filters[index] ?? ''
-        const missing = missingMembers(group.tools, uninstalledTools ?? [])
-        const missingSet = new Set(missing)
         const visible = choices.filter(tool => tool.toLowerCase().includes(filter.toLowerCase()))
         return (
           <Collapsible
@@ -137,7 +135,7 @@ export function GroupsEditor({ basicTools, disabled, groups, lockedTools, onBloc
                   {visible.map(tool => (
                     <ToolActivatorCheckbox
                       checked={group.tools.includes(tool)}
-                      className={missingSet.has(tool) ? `${CLASSES.choice} ${CLASSES.choiceMissing}` : CLASSES.choice}
+                      className={CLASSES.choice}
                       disabled={disabled}
                       key={tool}
                       label={tool}
@@ -157,28 +155,6 @@ export function GroupsEditor({ basicTools, disabled, groups, lockedTools, onBloc
                     />
                   ))}
                 </div>
-                {missing.length > 0
-                  ? (
-                      <div className={CLASSES.toolbar}>
-                        <span className={CLASSES.missingNote}>{`已卸载 ${missing.length} 个：${missing.join('、')}（所属插件可能已被移除）`}</span>
-                        <ToolActivatorButton
-                          disabled={disabled === true}
-                          onClick={() => {
-                            const kept = group.tools.filter(tool => !missingSet.has(tool))
-                            replace(index, { ...group, tools: kept })
-                            // 整组都是已卸载成员时，移除后是空分组：宿主不会保存它，
-                            // 当场说明，而不是让用户以为清掉了、刷新后又回来。
-                            if (kept.length === 0)
-                              onBlocked?.(`分组 ${group.identifier || `第 ${position} 组`} 的成员已全部移除；空分组不会被保存，请删除该分组或补充其他工具。`)
-                          }}
-                          size="sm"
-                          variant="outline"
-                        >
-                          移除已卸载成员
-                        </ToolActivatorButton>
-                      </div>
-                    )
-                  : null}
               </div>
               <div className={`${CLASSES.field} ${CLASSES.fieldWide}`}>
                 <span className={CLASSES.fieldLabel}>说明节</span>

@@ -2,14 +2,12 @@ import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { ToolGroup, ToolPolicy } from './shared'
 import { describe, expect, it } from 'vitest'
 import { availableToolsForDiscovery, buildToolCatalog, enabledToolNames, sectionToolDependencies } from './catalog'
-import { DEFAULT_PASSIVE_RELEASE } from './shared'
 
 function policy(overrides: Partial<ToolPolicy> = {}): ToolPolicy {
   return {
     basicTools: ['read'],
     requireApproval: true,
     autoGroupMcp: true,
-    passiveRelease: { ...DEFAULT_PASSIVE_RELEASE },
     groups: [],
     sectionTools: {},
     ...overrides,
@@ -191,7 +189,6 @@ describe('enabledToolNames', () => {
 
     expect([...enabledToolNames(catalog, current, ['web', 'unknown', 'write'])].sort()).toEqual([
       'activate_tools',
-      'deactivate_tools',
       'read',
       'run_code',
       'web_fetch',
@@ -203,8 +200,8 @@ describe('enabledToolNames', () => {
     const current = policy({ groups: [group('editor', ['read', 'write'])] })
     const catalog = buildToolCatalog([tool('read'), tool('write')], current)
 
-    expect([...enabledToolNames(catalog, current, [])].sort()).toEqual(['activate_tools', 'deactivate_tools', 'read', 'run_code'])
-    expect([...enabledToolNames(catalog, current, ['editor', 'editor'])].sort()).toEqual(['activate_tools', 'deactivate_tools', 'read', 'run_code', 'write'])
+    expect([...enabledToolNames(catalog, current, [])].sort()).toEqual(['activate_tools', 'read', 'run_code'])
+    expect([...enabledToolNames(catalog, current, ['editor', 'editor'])].sort()).toEqual(['activate_tools', 'read', 'run_code', 'write'])
   })
 
   it('keeps an activated tool enabled after its group was renamed', () => {
@@ -214,16 +211,16 @@ describe('enabledToolNames', () => {
     // Without the recorded names the renamed group is a different group: only the
     // basic tools survive, which is how a session activated before the names were
     // recorded keeps working.
-    expect([...enabledToolNames(renamed, after, ['editor'])].sort()).toEqual(['activate_tools', 'deactivate_tools', 'read', 'run_code'])
-    expect([...enabledToolNames(renamed, after, ['editor'], ['read', 'write'])].sort()).toEqual(['activate_tools', 'deactivate_tools', 'read', 'run_code', 'write'])
+    expect([...enabledToolNames(renamed, after, ['editor'])].sort()).toEqual(['activate_tools', 'read', 'run_code'])
+    expect([...enabledToolNames(renamed, after, ['editor'], ['read', 'write'])].sort()).toEqual(['activate_tools', 'read', 'run_code', 'write'])
   })
 
   it('keeps an activated tool enabled after its group was deleted', () => {
     const after = policy({})
     const catalog = buildToolCatalog([tool('read'), tool('write')], after)
 
-    expect([...enabledToolNames(catalog, after, ['editor'], ['write'])].sort()).toEqual(['activate_tools', 'deactivate_tools', 'read', 'run_code', 'write'])
-    expect([...enabledToolNames(catalog, after, ['editor'])].sort()).toEqual(['activate_tools', 'deactivate_tools', 'read', 'run_code'])
+    expect([...enabledToolNames(catalog, after, ['editor'], ['write'])].sort()).toEqual(['activate_tools', 'read', 'run_code', 'write'])
+    expect([...enabledToolNames(catalog, after, ['editor'])].sort()).toEqual(['activate_tools', 'read', 'run_code'])
   })
 
   it('unions the basic tools, the activated identifiers and the activated tool names', () => {
@@ -234,7 +231,6 @@ describe('enabledToolNames', () => {
 
     expect([...enabledToolNames(catalog, current, ['files'], ['web_fetch'])].sort()).toEqual([
       'activate_tools',
-      'deactivate_tools',
       'read',
       'run_code',
       'web_fetch',
@@ -249,7 +245,7 @@ describe('enabledToolNames', () => {
     const current = policy({ basicTools: ['read', 'bash'] })
     const catalog = buildToolCatalog([tool('read')], current)
 
-    expect([...enabledToolNames(catalog, current, [])].sort()).toEqual(['activate_tools', 'bash', 'deactivate_tools', 'read', 'run_code'])
+    expect([...enabledToolNames(catalog, current, [])].sort()).toEqual(['activate_tools', 'bash', 'read', 'run_code'])
   })
 
   it('seeds activated tool names that have not registered yet', () => {
@@ -257,7 +253,7 @@ describe('enabledToolNames', () => {
     const catalog = buildToolCatalog([tool('read')], current)
 
     expect([...enabledToolNames(catalog, current, ['editor'], ['write', 'apply_patch'])].sort())
-      .toEqual(['activate_tools', 'apply_patch', 'deactivate_tools', 'read', 'run_code', 'write'])
+      .toEqual(['activate_tools', 'apply_patch', 'read', 'run_code', 'write'])
   })
 })
 
