@@ -1,7 +1,7 @@
 import type { ConfigurationOp } from './types'
 
 /** The config fields this page can dirty; a drain ships them in one write. */
-export type WriteField = 'basicTools' | 'requireApproval' | 'autoGroupMcp' | 'groups'
+export type WriteField = 'basicTools' | 'requireApproval' | 'autoGroupMcp' | 'passiveRelease' | 'groups'
 
 export interface SerialWriteQueueOptions {
   /**

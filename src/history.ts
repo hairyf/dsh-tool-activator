@@ -4,8 +4,9 @@ import type { } from '@deepseek-ai/dsh-tools'
 import type { } from '@deepseek-ai/dsh-user-approval'
 import type { ActivationEnvelope, ActivationHistory, ActivationReceipt } from './types'
 import { z } from 'zod'
-import { receiptFromContent } from './activation'
-import { ACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME } from './constants'
+import { receiptFromContent, requestedIdentifiers } from './activation'
+import { ACTIVATOR_TOOL_NAME, DEACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME } from './constants'
+import { releasedOf, releaseReceiptFromContent } from './release'
 
 /**
  * The shape of a grouping result that may carry the names a rename or a removal
@@ -16,7 +17,6 @@ const groupingResultSchema = z.object({
   action: z.enum(['list', 'apply']),
   migrated: z.array(z.string()).optional(),
 })
-const requestSchema = z.object({ identifiers: z.array(z.string()), reason: z.string() })
 
 export function emptyActivationHistory(): ActivationHistory {
   return { activatedToolIds: [], activatedSkills: [], pendingCalls: [] }
@@ -52,13 +52,27 @@ export function mergeActivation(state: ActivationHistory, result: ActivationEnve
   }
 }
 
-function parseRequest(value: unknown): string[] | undefined {
-  try {
-    const result = requestSchema.safeParse(typeof value === 'string' ? JSON.parse(value) : value)
-    return result.success ? result.data.identifiers : undefined
+/**
+ * Apply a release to the session's activation account.
+ *
+ * The fold only subtracts: a release takes the identifiers and the names out
+ * of the account, and it never decides what should have been released. The
+ * subtraction is idempotent, so a record that arrives twice changes nothing
+ * the second time.
+ */
+export function mergeRelease(state: ActivationHistory, release: { identifiers: readonly string[], names: readonly string[] }): ActivationHistory {
+  const identifiers = new Set(release.identifiers)
+  const names = new Set(release.names)
+  const activatedToolIds = state.activatedToolIds.filter(id => !identifiers.has(id))
+  const activatedToolNames = (state.activatedToolNames ?? []).filter(name => !names.has(name))
+  if (activatedToolIds.length === state.activatedToolIds.length
+    && activatedToolNames.length === (state.activatedToolNames?.length ?? 0)) {
+    return state
   }
-  catch {
-    return undefined
+  return {
+    ...state,
+    activatedToolIds,
+    ...(state.activatedToolNames === undefined ? {} : { activatedToolNames }),
   }
 }
 
@@ -89,15 +103,31 @@ function validReceipt(state: ActivationHistory, receipt: ActivationReceipt, call
     && receipt.state.activatedSkills.every(skill => identifiers.includes(skill.name) && receipt.commit.activatedSkills.some(item => item.id === skill.id && item.name === skill.name))
 }
 
+/**
+ * Fold one session event into the activation account.
+ *
+ * The fold only applies what the events describe. The reserved `skillReleases`
+ * field travels along untouched: decision 13 keeps skill releases out of v1, so
+ * no event writes that field and none of them reads it.
+ */
 export function foldActivationEvent(state: ActivationHistory, event: SessionEvent): ActivationHistory {
   if (event.type === 'tool/call' && event.data.name === ACTIVATOR_TOOL_NAME) {
-    const identifiers = parseRequest(event.data.arguments)
+    const identifiers = requestedIdentifiers(event.data.arguments)
     if (!identifiers)
       return state
     return {
       ...state,
       pendingCalls: [...new Set([...state.pendingCalls, event.data.callId])],
       pendingRequests: [...(state.pendingRequests ?? []).filter(item => item.callId !== event.data.callId), { callId: event.data.callId, identifiers }],
+    }
+  }
+
+  if (event.type === 'tool/call' && event.data.name === DEACTIVATOR_TOOL_NAME) {
+    // A release result carries no tool name of its own, so the call is the only
+    // thing that tells it apart from any other tool result.
+    return {
+      ...state,
+      pendingDeactivateCalls: [...new Set([...(state.pendingDeactivateCalls ?? []), event.data.callId])],
     }
   }
 
@@ -108,6 +138,18 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
       ...state,
       pendingGroupingCalls: [...new Set([...(state.pendingGroupingCalls ?? []), event.data.callId])],
     }
+  }
+
+  if (event.type === 'user/message') {
+    // The catalog message carries the release records of this session: the
+    // fold applies them and never recomputes what should have been released.
+    const released = releasedOf(event.data.source)
+    if (released.length === 0)
+      return state
+    return mergeRelease(state, {
+      identifiers: released.map(entry => entry.identifier),
+      names: released.flatMap(entry => entry.names),
+    })
   }
 
   if (event.type === 'approval/asked' && event.data.toolName === ACTIVATOR_TOOL_NAME && event.data.callId) {
@@ -138,7 +180,8 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
     const pending = (state.pendingActivations ?? []).filter(item => item.parentCallId === message.toolCallId)
     const request = (state.pendingRequests ?? []).find(item => item.callId === message.toolCallId)
     const grouping = (state.pendingGroupingCalls ?? []).includes(message.toolCallId)
-    if (!request && pending.length === 0 && !grouping)
+    const deactivating = (state.pendingDeactivateCalls ?? []).includes(message.toolCallId)
+    if (!request && pending.length === 0 && !grouping && !deactivating)
       return state
     let next: ActivationHistory = {
       ...state,
@@ -147,6 +190,7 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
       ...(state.pendingActivations ? { pendingActivations: state.pendingActivations.filter(item => item.parentCallId !== message.toolCallId) } : {}),
       ...(state.approvedCalls ? { approvedCalls: state.approvedCalls.filter(id => id !== message.toolCallId) } : {}),
       ...(state.pendingGroupingCalls ? { pendingGroupingCalls: state.pendingGroupingCalls.filter(id => id !== message.toolCallId) } : {}),
+      ...(state.pendingDeactivateCalls ? { pendingDeactivateCalls: state.pendingDeactivateCalls.filter(id => id !== message.toolCallId) } : {}),
     }
     if (message.isError)
       return next
@@ -156,6 +200,18 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
       const receipt = receiptFromContent(message.content)
       if (receipt && validReceipt(state, receipt, message.toolCallId, request.identifiers))
         next = mergeActivation(next, receipt)
+    }
+    if (deactivating) {
+      // The release the tool result carries is the same record the catalog
+      // message publishes; applying it here keeps the release durable even when
+      // the session ends before the next step publishes the catalog.
+      const receipt = releaseReceiptFromContent(message.content)
+      if (receipt) {
+        next = mergeRelease(next, {
+          identifiers: receipt.released.identifiers,
+          names: receipt.released.toolNames,
+        })
+      }
     }
     if (grouping) {
       // The names of the members a renamed or removed group carried join the
@@ -179,7 +235,7 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
     const staged = pending.map(item => ({ ...item, parentCallId: event.data.parentCallId }))
     if (event.data.name === ACTIVATOR_TOOL_NAME) {
       const receipt = receiptFromContent(event.data.content)
-      const identifiers = parseRequest(event.data.arguments)
+      const identifiers = requestedIdentifiers(event.data.arguments)
       if (receipt && identifiers && validReceipt(state, receipt, event.data.subCallId, identifiers))
         staged.push({ callId: event.data.subCallId, parentCallId: event.data.parentCallId, activation: receipt })
     }
@@ -193,6 +249,7 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
       || (state.approvalRequests?.length ?? 0) > 0
       || (state.approvedCalls?.length ?? 0) > 0
       || (state.pendingGroupingCalls?.length ?? 0) > 0
+      || (state.pendingDeactivateCalls?.length ?? 0) > 0
     if (hasPending) {
       return {
         ...state,
@@ -202,6 +259,7 @@ export function foldActivationEvent(state: ActivationHistory, event: SessionEven
         ...(state.approvalRequests ? { approvalRequests: [] } : {}),
         ...(state.approvedCalls ? { approvedCalls: [] } : {}),
         ...(state.pendingGroupingCalls ? { pendingGroupingCalls: [] } : {}),
+        ...(state.pendingDeactivateCalls ? { pendingDeactivateCalls: [] } : {}),
       }
     }
   }

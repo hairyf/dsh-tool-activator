@@ -3,6 +3,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { CatalogEntry, CatalogPublication, CatalogPublisher } from './types'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { ACTIVATOR_SOURCE_KIND, CATALOG_FORM } from './constants'
+import { stripReleasedTools } from './prompt'
 
 /**
  * 头标记：重发目录时追加的「已消失条目」段。读回上一条已发布消息时从这个
@@ -42,24 +43,30 @@ export function createCatalogPublisher(): CatalogPublisher {
       if (catalog === undefined)
         return undefined
       const published = publishedCatalog(agent)
+      const released = catalog.released ?? []
       // 「消失」只认全量成员表：条目被激活后离开的是可选目录，全量表里它还
       // 在，不会误报成已卸载。旧版本消息没有 members，退化为不点名。
       const removed = published?.members === undefined ? [] : removedCatalogEntries(published.members, catalog.members)
-      // 两次裸目录文本的相等比较让未变化的目录不再重发；「已消失」段因此
-      // 在比较前被裁掉，而不是参与比较。
-      if (published !== undefined && published.core === catalog.text && removed.length === 0)
+      // 裸目录之间的相等比较让未变化的目录不再重发：released 段是本目录状态
+      // 之上的增量、removed 段是追加的点名，都不参与比较。released 非空必须
+      // 发布——模型得知道哪些工具离开了它的工具面。
+      if (released.length === 0 && removed.length === 0 && published !== undefined && published.core === stripReleasedTools(catalog.text))
         return undefined
       const text = removed.length === 0 ? catalog.text : `${catalog.text}\n\n${removedSection(removed)}`
-      return createUserMessage({
+      const message = createUserMessage({
         content: [{ type: 'text', text }],
         source: {
           kind: ACTIVATOR_SOURCE_KIND,
           form: CATALOG_FORM,
           entries: catalog.entries,
           members: catalog.members,
+          ...(released.length > 0 ? { released } : {}),
           ...(published === undefined ? {} : { update: true as const }),
         },
       })
+      // The records were published: they are not news any more.
+      prepared.set(agent, { ...catalog, released: [] })
+      return message
     },
   }
 }
@@ -72,9 +79,9 @@ export function catalogMessages(agent: Agent): UserMessage[] {
 }
 
 /**
- * 读回这个会话历史里最后一条目录：正文裁掉「已消失」段（裸目录），条目取
- * 自消息 source。恢复的会话带着重启前发布的消息、compaction 可能换掉它，
- * publisher 因此读会话而不是自己记，离开历史的目录会被重新发布。
+ * 读回这个会话历史里最后一条目录：正文裁掉「已消失」与「已释放」两段（裸目
+ * 录），条目取自消息 source。恢复的会话带着重启前发布的消息、compaction 可能
+ * 换掉它，publisher 因此读会话而不是自己记，离开历史的目录会被重新发布。
  */
 function publishedCatalog(agent: Agent): { core: string, entries: readonly CatalogEntry[], members: readonly CatalogEntry[] | undefined } | undefined {
   const messages = catalogMessages(agent)
@@ -88,7 +95,7 @@ function publishedCatalog(agent: Agent): { core: string, entries: readonly Catal
     return undefined
   const at = block.text.indexOf(REMOVED_SECTION_HEAD)
   return {
-    core: at < 0 ? block.text : block.text.slice(0, at).trimEnd(),
+    core: stripReleasedTools(at < 0 ? block.text : block.text.slice(0, at).trimEnd()),
     entries: 'form' in source ? source.entries : [],
     members: 'members' in source ? source.members : undefined,
   }

@@ -1,14 +1,15 @@
 import type { ReactElement } from 'react'
 import type { ActivationCatalog, ActivationCatalogEntry } from '../types'
-import type { ConfigurationDraft, ConfigurationOp, ConfigurationScope, ToolActivatorConfigurationProps, ToolGroupDraft, ToolGroupShape } from './types'
+import type { ConfigurationDraft, ConfigurationOp, ConfigurationScope, PassiveReleaseDraft, ToolActivatorConfigurationProps, ToolGroupDraft, ToolGroupShape } from './types'
 import type { SerialWriteQueue, WriteField } from './write-queue'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME } from '../constants'
+import { ACTIVATOR_TOOL_NAME, DEACTIVATOR_TOOL_NAME, GROUPING_TOOL_NAME } from '../constants'
 import { Collapsible } from './collapsible'
 import { CLASSES, GROUPS_WRITE_DELAY_MS } from './constants'
 import { groupsSavable, missingMembers } from './groups'
 import { GroupsEditor } from './groups-editor'
-import { ToolActivatorButton, ToolActivatorSwitch, ToolActivatorTag, ToolActivatorTooltip } from './primitives'
+import { countProblem, passiveReleaseValue, readPassiveReleaseDraft } from './passive-release'
+import { ToolActivatorButton, ToolActivatorInput, ToolActivatorSwitch, ToolActivatorTag, ToolActivatorTooltip } from './primitives'
 import { createSerialWriteQueue } from './write-queue'
 
 interface SettingRowProps {
@@ -87,6 +88,7 @@ function readDraft(scope: ConfigurationScope): ConfigurationDraft {
     basicTools: readList(scope, 'basicTools') ?? [],
     requireApproval: readFlag(scope, 'requireApproval'),
     autoGroupMcp: readFlag(scope, 'autoGroupMcp'),
+    passiveRelease: readPassiveReleaseDraft(scope.getSnapshot().value?.passiveRelease),
     groups: readGroups(scope),
   }
 }
@@ -105,6 +107,14 @@ function draftOps(draft: ConfigurationDraft, fields: readonly WriteField[]): Con
     }
     if (field === 'autoGroupMcp' && draft.autoGroupMcp !== undefined) {
       ops.push({ op: 'set', path: ['autoGroupMcp'], value: draft.autoGroupMcp })
+      continue
+    }
+    // An unsavable passive release draft stays local, exactly like a group
+    // draft: writing it would only bounce off the Host schema.
+    if (field === 'passiveRelease') {
+      const value = passiveReleaseValue(draft.passiveRelease)
+      if (value !== undefined)
+        ops.push({ op: 'set', path: ['passiveRelease'], value })
       continue
     }
     // An unsavable group draft stays local: writing it would only bounce off
@@ -275,12 +285,18 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
   )
   const requireApproval = draft.requireApproval ?? catalog?.requireApproval ?? true
   const autoGroupMcp = draft.autoGroupMcp ?? catalog?.autoGroupMcp ?? true
-  // The plugin pins two of its own tools, so no group may ever claim them: the
-  // activator loads tools, and the grouping tool rewrites the grouping — bundling
-  // either would let a group hand out the machinery that defines groups.
+  // The passive release policy is a persistent setting, so the page only ever
+  // shows what the document holds: the session's own activations stay out of it.
+  const passiveRelease = draft.passiveRelease
+  const idleProblem = countProblem(passiveRelease.idleTurns, '空闲轮数必须是大于等于 1 的整数。')
+  const capProblem = countProblem(passiveRelease.maxActivatedTools, '激活工具上限必须是大于等于 1 的整数。')
+  // The plugin pins its own tools, so no group may ever claim them: the
+  // activator loads tools, the deactivator releases them, and the grouping
+  // tool rewrites the grouping — bundling any of them would let a group hand
+  // out the machinery that defines groups.
   const lockedTools = useMemo(
     () => [
-      ...(catalog?.entries ?? []).filter(entry => entry.identifier === ACTIVATOR_TOOL_NAME).flatMap(entry => entry.tools),
+      ...(catalog?.entries ?? []).filter(entry => entry.identifier === ACTIVATOR_TOOL_NAME || entry.identifier === DEACTIVATOR_TOOL_NAME).flatMap(entry => entry.tools),
       GROUPING_TOOL_NAME,
     ],
     [catalog],
@@ -303,7 +319,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     const active: ActivationCatalogEntry[] = []
     const pending: ActivationCatalogEntry[] = []
     for (const entry of entries)
-      (entry.identifier === ACTIVATOR_TOOL_NAME || isDefaultLoaded(entry, draft.basicTools) ? active : pending).push(entry)
+      (entry.identifier === ACTIVATOR_TOOL_NAME || entry.identifier === DEACTIVATOR_TOOL_NAME || isDefaultLoaded(entry, draft.basicTools) ? active : pending).push(entry)
     // The plugin's own base tools head their section; everything the user added
     // after them, each group alphabetical.
     const byBaseThenName = (left: ActivationCatalogEntry, right: ActivationCatalogEntry): number => {
@@ -328,6 +344,15 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
 
   const setFlag = useCallback((field: 'requireApproval' | 'autoGroupMcp', next: boolean): void => {
     commitDraft(prev => ({ ...prev, [field]: next }), [field])
+  }, [commitDraft])
+
+  /**
+   * The passive release counts are the Host's own rule: a count it would refuse
+   * stays a local draft, so the page can say why instead of bouncing off the
+   * schema and rolling the whole document back.
+   */
+  const setPassiveRelease = useCallback((change: (prev: PassiveReleaseDraft) => PassiveReleaseDraft): void => {
+    commitDraft(prev => ({ ...prev, passiveRelease: change(prev.passiveRelease) }), ['passiveRelease'])
   }, [commitDraft])
 
   /**
@@ -375,7 +400,7 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
     return (
       <ul className={CLASSES.list}>
         {entries.map((entry) => {
-          const locked = entry.identifier === ACTIVATOR_TOOL_NAME
+          const locked = entry.identifier === ACTIVATOR_TOOL_NAME || entry.identifier === DEACTIVATOR_TOOL_NAME
           return (
             <li className={CLASSES.row} key={entry.identifier}>
               <span className={CLASSES.rowText}>
@@ -478,6 +503,39 @@ export function ToolActivatorConfiguration({ view, configScope, loadToolCatalog 
                   toolNames={(catalog.entries ?? []).flatMap(entry => entry.tools)}
                   uninstalledTools={uninstalledTools}
                 />
+              </section>
+              <section className={CLASSES.section}>
+                <h4 className={CLASSES.sectionTitle}>会话工具释放</h4>
+                <p className={CLASSES.help}>长会话里临时激活的工具会一直占着上下文；开启后，空闲太久或超过上限的已激活工具会被本会话收回，需要时再激活即可。</p>
+                <ul className={CLASSES.list}>
+                  <SettingRow
+                    checked={passiveRelease.enabled}
+                    description="开启后，空闲或超过上限的已激活工具会被本会话自动收回；关闭则保留会话里激活的一切，模型仍可主动释放。"
+                    disabled={readOnly}
+                    label="启用被动释放"
+                    onChange={next => void setPassiveRelease(prev => ({ ...prev, enabled: next }))}
+                  />
+                </ul>
+                <label className={CLASSES.field}>
+                  <span className={CLASSES.fieldLabel}>空闲轮数</span>
+                  <ToolActivatorInput
+                    className={CLASSES.countInput}
+                    disabled={readOnly || !passiveRelease.enabled}
+                    onValueChange={value => setPassiveRelease(prev => ({ ...prev, idleTurns: value }))}
+                    value={passiveRelease.idleTurns}
+                  />
+                </label>
+                {idleProblem === '' ? null : <p className={CLASSES.error}>{idleProblem}</p>}
+                <label className={CLASSES.field}>
+                  <span className={CLASSES.fieldLabel}>激活工具上限</span>
+                  <ToolActivatorInput
+                    className={CLASSES.countInput}
+                    disabled={readOnly || !passiveRelease.enabled}
+                    onValueChange={value => setPassiveRelease(prev => ({ ...prev, maxActivatedTools: value }))}
+                    value={passiveRelease.maxActivatedTools}
+                  />
+                </label>
+                {capProblem === '' ? null : <p className={CLASSES.error}>{capProblem}</p>}
               </section>
             </>
           )}

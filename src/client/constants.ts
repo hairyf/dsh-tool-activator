@@ -36,6 +36,7 @@ export const CLASSES = {
   groupHeader: 'dsh-tool-activator-group-header',
   groupBody: 'dsh-tool-activator-group-body',
   field: 'dsh-tool-activator-field',
+  countInput: 'dsh-tool-activator-count-input',
   fieldLabel: 'dsh-tool-activator-field-label',
   fieldWide: 'dsh-tool-activator-field-wide',
   choices: 'dsh-tool-activator-choices',

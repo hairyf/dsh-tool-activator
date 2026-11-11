@@ -2,15 +2,23 @@ import type { ToolGroup, ToolPolicy } from './shared'
 import type { GroupProblem } from './types'
 import Schema from '@deepseek-ai/schemastery'
 import { GROUP_IDENTIFIER_PATTERN } from './constants'
-import { DEFAULT_POLICY } from './shared'
+import { DEFAULT_PASSIVE_RELEASE, DEFAULT_POLICY } from './shared'
 
 const identifier = Schema.string().pattern(GROUP_IDENTIFIER_PATTERN).required()
 const toolNames = Schema.array(identifier).default([])
+
+/** A whole number of at least one: both passive release counts are counts. */
+const count = Schema.number().step(1).min(1)
 
 export const Config = Schema.object({
   basicTools: toolNames.default([...DEFAULT_POLICY.basicTools]).description('默认加载的真实工具名称'),
   requireApproval: Schema.boolean().default(DEFAULT_POLICY.requireApproval).description('非完全权限时激活前请求用户确认；缺少审批服务时拒绝'),
   autoGroupMcp: Schema.boolean().default(DEFAULT_POLICY.autoGroupMcp).description('按公开 mcp__server__tool 名称聚合同一 MCP 服务'),
+  passiveRelease: Schema.object({
+    enabled: Schema.boolean().default(DEFAULT_PASSIVE_RELEASE.enabled).description('是否开启会话工具的被动释放'),
+    idleTurns: count.default(DEFAULT_PASSIVE_RELEASE.idleTurns).description('空闲多少轮后收回不再使用的已激活工具'),
+    maxActivatedTools: count.default(DEFAULT_PASSIVE_RELEASE.maxActivatedTools).description('单会话已激活工具数量的软上限'),
+  }).default({}).description('会话工具的被动释放策略'),
   groups: Schema.array(Schema.object({
     identifier,
     name: Schema.string().default(''),

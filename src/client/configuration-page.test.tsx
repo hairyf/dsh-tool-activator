@@ -107,13 +107,14 @@ function liveScope(value: Record<string, unknown>): { scope: ConfigurationScope,
 }
 
 describe('tool configuration page', () => {
-  it('pins only the activator regardless of the configured defaults', async () => {
+  it('pins the activator and the deactivator regardless of the configured defaults', async () => {
     const custom: ActivationCatalog = {
       autoGroupMcp: true,
-      baseTools: ['activate_tools', 'read'],
+      baseTools: ['activate_tools', 'deactivate_tools', 'read'],
       basicTools: ['read'],
       entries: [
         { identifier: 'activate_tools', name: 'activate_tools', description: 'Enable tools on demand', tools: ['activate_tools'] },
+        { identifier: 'deactivate_tools', name: 'deactivate_tools', description: 'Release session tools', tools: ['deactivate_tools'] },
         { identifier: 'read', name: 'read', description: 'Read a file', tools: ['read'] },
         { identifier: 'pwsh', name: 'pwsh', description: 'Run the shell', tools: ['pwsh'] },
       ],
@@ -124,11 +125,16 @@ describe('tool configuration page', () => {
     renderPage(scope, async () => custom)
     await openToolLists()
 
-    expect(await screen.findByText('默认激活工具（1 个）')).toBeTruthy()
+    expect(await screen.findByText('默认激活工具（2 个）')).toBeTruthy()
     const activator = screen.getByRole('switch', { name: '默认加载 activate_tools' })
     expect(activator).toHaveProperty('disabled', true)
     expect(activator.getAttribute('aria-checked')).toBe('true')
-    activator.click()
+    // The deactivator is the second pinned manager: it releases what the
+    // activator loaded, so no group or defaults toggle may take it away.
+    const deactivator = screen.getByRole('switch', { name: '默认加载 deactivate_tools' })
+    expect(deactivator).toHaveProperty('disabled', true)
+    expect(deactivator.getAttribute('aria-checked')).toBe('true')
+    deactivator.click()
     expect(scope.mutate).not.toHaveBeenCalled()
     const read = screen.getByRole('switch', { name: '默认加载 read' })
     expect(read).toHaveProperty('disabled', false)
@@ -617,5 +623,62 @@ describe('tool configuration page', () => {
 
     expect(await screen.findByText('默认激活工具（1 个）')).toBeTruthy()
     expect(screen.queryByText(/已卸载/)).toBeNull()
+  })
+
+  it('shows the passive release section with the schema defaults', async () => {
+    renderPage(scopeOf({ basicTools: ['read'] }))
+
+    expect(await screen.findByText('会话工具释放')).toBeTruthy()
+    expect(screen.getByRole('switch', { name: '启用被动释放' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByLabelText('空闲轮数')).toHaveProperty('value', '6')
+    expect(screen.getByLabelText('激活工具上限')).toHaveProperty('value', '24')
+  })
+
+  it('reads the passive release block the document holds', async () => {
+    renderPage(scopeOf({ passiveRelease: { enabled: false, idleTurns: 3, maxActivatedTools: 12 } }))
+
+    expect((await screen.findByRole('switch', { name: '启用被动释放' })).getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByLabelText('空闲轮数')).toHaveProperty('value', '3')
+    expect(screen.getByLabelText('激活工具上限')).toHaveProperty('value', '12')
+  })
+
+  it('writes the passive release block when the switch is turned off', async () => {
+    const scope = scopeOf({ basicTools: ['read'] })
+    renderPage(scope)
+
+    fireEvent.click(await screen.findByRole('switch', { name: '启用被动释放' }))
+
+    await waitFor(() => expect(scope.mutate).toHaveBeenCalledWith([
+      { op: 'set', path: ['passiveRelease'], value: { enabled: false, idleTurns: 6, maxActivatedTools: 24 } },
+    ]))
+  })
+
+  it('locks the two counts while passive release is off', async () => {
+    renderPage(scopeOf({ passiveRelease: { enabled: false } }))
+
+    expect(await screen.findByLabelText('空闲轮数')).toHaveProperty('disabled', true)
+    expect(screen.getByLabelText('激活工具上限')).toHaveProperty('disabled', true)
+  })
+
+  it('keeps a count the Host would refuse local and says why', async () => {
+    const scope = scopeOf({ basicTools: ['read'] })
+    renderPage(scope)
+
+    fireEvent.change(await screen.findByLabelText('空闲轮数'), { target: { value: '0' } })
+
+    expect(await screen.findByText('空闲轮数必须是大于等于 1 的整数。')).toBeTruthy()
+    // The config schema refuses this count, so the draft never reaches the Host.
+    expect(scope.mutate).not.toHaveBeenCalled()
+  })
+
+  it('saves a count the Host accepts', async () => {
+    const scope = scopeOf({ basicTools: ['read'] })
+    renderPage(scope)
+
+    fireEvent.change(await screen.findByLabelText('激活工具上限'), { target: { value: '12' } })
+
+    await waitFor(() => expect(scope.mutate).toHaveBeenCalledWith([
+      { op: 'set', path: ['passiveRelease'], value: { enabled: true, idleTurns: 6, maxActivatedTools: 12 } },
+    ]))
   })
 })

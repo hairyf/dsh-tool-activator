@@ -161,3 +161,41 @@ describe('createCatalogPublisher', () => {
     ])
   })
 })
+
+describe('the release records of a catalog', () => {
+  const released = [{ identifier: 'files', names: ['read'], reason: { kind: 'active' as const, text: 'The files are not needed any more' } }]
+
+  it('publishes a catalog with release records even when the bare catalog did not change', () => {
+    const publisher = createCatalogPublisher()
+    const { agent } = fakeAgent()
+    publisher.prepare(agent, { ...publication('CATALOG'), released })
+
+    const message = publisher.publish(agent)
+    expect(message?.source).toMatchObject({ released })
+  })
+
+  it('compares the catalogs without the released section', () => {
+    const publisher = createCatalogPublisher()
+    const { agent, land } = fakeAgent()
+    publisher.prepare(agent, { text: 'CATALOG\n\n<released_tools>\n  <tool identifier="files" names="read"/>\n</released_tools>', entries: [], members: [], released })
+    land(publisher.publish(agent)!)
+
+    // The bare catalog did not change, so the next publication without the
+    // increment is not published again.
+    publisher.prepare(agent, { text: 'CATALOG', entries: [], members: [] })
+    expect(publisher.publish(agent)).toBeUndefined()
+  })
+
+  it('compares the catalogs without the released section when it sits in the middle', () => {
+    const publisher = createCatalogPublisher()
+    const { agent, land } = fakeAgent()
+    publisher.prepare(agent, { text: 'CATALOG\n\n<released_tools>\n  <tool identifier="files" names="read"/>\n</released_tools>\n\nDOCS', entries: [], members: [], released })
+    land(publisher.publish(agent)!)
+
+    // The bare catalog did not change: the section and the blank line it
+    // introduced are gone, so the text reads exactly like a catalog that never
+    // carried the section.
+    publisher.prepare(agent, { text: 'CATALOG\n\nDOCS', entries: [], members: [] })
+    expect(publisher.publish(agent)).toBeUndefined()
+  })
+})
