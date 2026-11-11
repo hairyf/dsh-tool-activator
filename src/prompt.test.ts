@@ -206,6 +206,46 @@ describe('filterPromptAssembly with deferDeclarations', () => {
   })
 })
 
+describe('filterPromptAssembly on a host that owns the declarations', () => {
+  /** dsh >= 0.2.2: the waterfall receives a presentation with no tool list at all. */
+  function ownerlessAssembly(): Omit<PromptAssembly, 'tools'> {
+    const { tools: _tools, ...rest } = assembly()
+    return rest
+  }
+
+  it('returns the presentation without a tool list instead of dereferencing one', () => {
+    const source = ownerlessAssembly()
+    const catalog = [entry('read', [tool('read', 'Read a file')])]
+    const result = filterPromptAssembly(source, catalog, policy(), new Set(['read', 'activate_tools', 'run_code']), undefined, [])
+
+    // The host merges its own provider-owned schemas afterwards; writing a list
+    // back here is discarded, and reading one that is absent used to throw.
+    expect('tools' in result).toBe(false)
+    expect(result.contexts).toEqual(source.contexts)
+    expect(result.variables.tool_activator_context).toContain('Read a file')
+  })
+
+  it('still publishes the catalog and the usage sections it took out of the prompt', () => {
+    const source = ownerlessAssembly()
+    const catalog = [entry('read', [tool('read', 'Read a file')]), entry('write', [tool('write', 'Write a file')])]
+    const result = filterPromptAssembly(source, catalog, policy(), new Set(['read', 'activate_tools', 'run_code']), undefined, [])
+    const output = rendered(result as PromptAssembly)
+
+    expect(output).toContain('READ_USAGE_BODY')
+    expect(output).not.toContain('WRITE_USAGE_BODY')
+    expect(result.variables.tool_activator_context).toContain('<available_tools')
+  })
+
+  it('accepts the deferred mode without a declaration list to defer', () => {
+    const source = ownerlessAssembly()
+    const catalog = [entry('read', [tool('read', 'Read a file')])]
+    const result = filterPromptAssembly(source, catalog, policy(), new Set(['read']), undefined, [], true)
+
+    expect('tools' in result).toBe(false)
+    expect(result.variables.tool_activator_context).toContain('# Tools Activator')
+  })
+})
+
 describe('filterPromptAssembly', () => {
   it('preserves unrelated assembly data, filters native schemas, and injects each body only once across real renderers', () => {
     const source = assembly()
