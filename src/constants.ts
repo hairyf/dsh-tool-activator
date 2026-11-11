@@ -1,42 +1,12 @@
-import type { ContextForm } from '@deepseek-ai/dsh-llm'
-
 export const ACTIVATOR_TOOL_NAME = 'activate_tools'
 export const RUN_CODE_TOOL_NAME = 'run_code'
-export const GROUPING_TOOL_NAME = 'group_tools'
-/** Tools no group may ever claim, whatever the configuration says. */
-export const LOCKED_TOOL_NAMES: readonly string[] = [ACTIVATOR_TOOL_NAME, RUN_CODE_TOOL_NAME, GROUPING_TOOL_NAME]
-/**
- * The config schema's identifier pattern; the engine rejects anything it would
- * refuse. The schema and the engine share one pattern, so a group the model
- * writes is always a group the configuration accepts.
- */
-export const GROUP_IDENTIFIER_PATTERN: RegExp = /^[\w.-]+$/u
-/** A group's description replaces its members' descriptions in the catalog, so it is capped. */
-export const GROUP_DESCRIPTION_LIMIT = 120
-/**
- * The reserved identifier of the always-loaded tools. The model addresses it as a
- * group so that membership can be edited through the same operations, but the
- * group itself exists in every configuration and cannot be created or deleted.
- */
-export const BASIC_GROUP_IDENTIFIER = 'basic'
-/**
- * Message source of this plugin's own contributions: the developer messages that
- * declare activated tools and the catalog the model reads about them.
- */
+/** Message source of the developer messages that declare activated tools. */
 export const ACTIVATOR_SOURCE_KIND = 'tool-activator'
-
-/** The host's own vocabulary for a republished catalog. */
-export const CATALOG_FORM = 'catalog' satisfies ContextForm
 export const ACTIVATION_PRODUCER = 'dsh-tool-activator'
 export const ACTIVATION_VERSION = 1
-/**
- * Version of the projected activation state. The wire envelope keeps its own
- * version, so bumping this one only invalidates the persisted projection cache:
- * rows written by an older fold are discarded and recomputed from the session
- * log instead of being applied forward into a state they do not describe.
- */
-export const ACTIVATION_STATE_VERSION = 2
 export const ACTIVATION_PROJECTION_KEY = 'tool-activator:activation'
+export const ACTIVATION_CONTEXT_NAME = 'tool-activator:context'
+export const ACTIVATION_CONTEXT_ORDER = 200
 export const SETTINGS_REMOTE_NAMESPACE = 'toolActivator'
 
 export const FIRST_PARTY_SECTION_TOOLS: Readonly<Record<string, readonly string[]>> = {

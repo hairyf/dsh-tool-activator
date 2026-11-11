@@ -13,21 +13,9 @@ function group(overrides: Partial<ToolGroupDraft> = {}): ToolGroupDraft {
   return { identifier: 'files', name: 'Files', description: 'File utilities', tools: ['read'], sections: [], ...overrides }
 }
 
-/** Group cards start folded, so a row-level test opens them first. */
-function openCards(): void {
-  for (const toggle of screen.queryAllByRole('button', { expanded: false }))
-    fireEvent.click(toggle)
-}
-
-function renderEditor(
-  groups: ToolGroupDraft[],
-  overrides: Partial<GroupsEditorProps> = {},
-  options: { expanded?: boolean } = {},
-) {
+function renderEditor(groups: ToolGroupDraft[], overrides: Partial<GroupsEditorProps> = {}) {
   const onChange = vi.fn()
-  render(<GroupsEditor basicTools={[]} lockedTools={[]} groups={groups} onChange={onChange} toolNames={TOOL_NAMES} {...overrides} />)
-  if (options.expanded !== false)
-    openCards()
+  render(<GroupsEditor groups={groups} onChange={onChange} toolNames={TOOL_NAMES} {...overrides} />)
   return onChange
 }
 
@@ -103,67 +91,5 @@ describe('groups editor', () => {
     expect(screen.getByLabelText('标识符')).toHaveProperty('disabled', true)
     screen.getByRole('button', { name: '添加分组' }).click()
     expect(onChange).not.toHaveBeenCalled()
-  })
-
-  it('offers only the tools no other owner holds, keeping its own members', () => {
-    renderEditor(
-      [group({ tools: ['pwsh'] }), group({ identifier: 'audio', tools: ['read'] })],
-      { basicTools: ['write'], toolNames: ['read', 'write', 'pwsh'] },
-    )
-
-    // The first card keeps its member and hides the other group's tool and the
-    // default-loaded one; the second card lists its own member only.
-    expect(screen.getByLabelText('pwsh')).toHaveProperty('checked', true)
-    expect(screen.getAllByLabelText('read')).toHaveLength(1)
-    expect(screen.queryByLabelText('write')).toBeNull()
-  })
-
-  it('starts folded and opens a card from its header', () => {
-    renderEditor([group()], {}, { expanded: false })
-
-    const toggle = screen.getByRole('button', { name: 'files' })
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryAllByRole('textbox')).toHaveLength(0)
-
-    fireEvent.click(toggle)
-    expect(screen.getByRole('button', { name: 'files' }).getAttribute('aria-expanded')).toBe('true')
-    expect(screen.queryAllByRole('textbox').length).toBeGreaterThan(0)
-  })
-
-  it('filters the tools inside a card', () => {
-    renderEditor([group({ tools: ['read'] })])
-
-    fireEvent.change(screen.getByPlaceholderText('过滤工具'), { target: { value: 'pw' } })
-
-    expect(screen.queryByLabelText('read')).toBeNull()
-    expect(screen.getByLabelText('pwsh')).toBeTruthy()
-  })
-
-  it('adds every visible tool at once', () => {
-    const onChange = renderEditor([group({ tools: ['read'] })])
-
-    fireEvent.click(screen.getByRole('button', { name: '全选可选工具' }))
-
-    expect((onChange.mock.calls[0]![0] as ToolGroupDraft[])[0]!.tools).toEqual(['read', 'write', 'pwsh'])
-  })
-
-  it('adds only the filtered tools when the card is filtered', () => {
-    const onChange = renderEditor([group({ tools: ['read'] })])
-
-    fireEvent.change(screen.getByPlaceholderText('过滤工具'), { target: { value: 'pw' } })
-    fireEvent.click(screen.getByRole('button', { name: '全选过滤结果' }))
-
-    expect((onChange.mock.calls[0]![0] as ToolGroupDraft[])[0]!.tools).toEqual(['read', 'pwsh'])
-  })
-
-  it('never offers the tool the plugin locks', () => {
-    renderEditor(
-      [group({ tools: ['read'] })],
-      { lockedTools: ['write'], toolNames: ['read', 'write', 'pwsh'] },
-    )
-
-    expect(screen.getByLabelText('read')).toHaveProperty('checked', true)
-    expect(screen.queryByLabelText('write')).toBeNull()
-    expect(screen.getByLabelText('pwsh')).toBeTruthy()
   })
 })

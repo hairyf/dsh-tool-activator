@@ -1,6 +1,6 @@
 import type { ToolGroup, ToolPolicy } from './shared'
 import { describe, expect, it } from 'vitest'
-import { collectGroupProblems, Config, validatePolicy } from './config'
+import { Config, validatePolicy } from './config'
 
 function parse(value: unknown): ToolPolicy {
   return Config(value as Parameters<typeof Config>[0]).get()
@@ -110,73 +110,5 @@ describe('validatePolicy', () => {
 
   it('rejects duplicate configured membership rather than silently normalizing configuration', () => {
     expect(() => validatePolicy(policy([group('files', ['read', 'read'])]))).toThrow('Tool read belongs to more than one configured group')
-  })
-})
-
-describe('collectGroupProblems', () => {
-  it('reports nothing for disjoint nonempty groups', () => {
-    expect(collectGroupProblems([group('files', ['read']), group('web', ['write'])])).toEqual([])
-  })
-
-  it('locates a duplicate identifier by the owning group and the group that clashes with it', () => {
-    const problems = collectGroupProblems([group('files', ['read']), group('files', ['write'])])
-
-    expect(problems).toHaveLength(1)
-    expect(problems[0]).toEqual({
-      kind: 'duplicate-identifier',
-      groupIndex: 0,
-      groupIdentifier: 'files',
-      conflictingGroupIndex: 1,
-      reason: 'Duplicate tool group identifier: files',
-    })
-  })
-
-  it('locates an empty group by its index and identifier', () => {
-    const problems = collectGroupProblems([group('files', ['read']), group('web', [])])
-
-    expect(problems).toHaveLength(1)
-    expect(problems[0]).toEqual({
-      kind: 'empty-group',
-      groupIndex: 1,
-      groupIdentifier: 'web',
-      reason: 'Tool group web must contain at least one tool',
-    })
-  })
-
-  it('locates a tool claimed by more than one group', () => {
-    const problems = collectGroupProblems([group('files', ['read']), group('other', ['read'])])
-
-    expect(problems).toHaveLength(1)
-    expect(problems[0]).toEqual({
-      kind: 'tool-in-multiple-groups',
-      groupIndex: 1,
-      groupIdentifier: 'other',
-      conflictingGroupIndex: 0,
-      tool: 'read',
-      reason: 'Tool read belongs to more than one configured group',
-    })
-  })
-
-  it('returns every problem of a broken batch at once instead of stopping at the first one', () => {
-    const problems = collectGroupProblems([
-      group('files', ['read']),
-      group('files', []),
-      group('other', ['read']),
-    ])
-
-    expect(problems.map(problem => problem.kind)).toEqual([
-      'duplicate-identifier',
-      'empty-group',
-      'tool-in-multiple-groups',
-    ])
-    expect(problems[0]).toMatchObject({ groupIndex: 0, groupIdentifier: 'files', conflictingGroupIndex: 1 })
-    expect(problems[1]).toMatchObject({ groupIndex: 1, groupIdentifier: 'files' })
-    expect(problems[2]).toMatchObject({ groupIndex: 2, groupIdentifier: 'other', tool: 'read' })
-  })
-
-  it('keeps validatePolicy throwing only the first problem with the established wording', () => {
-    const groups = [group('files', ['read']), group('files', []), group('other', ['read'])]
-
-    expect(() => validatePolicy(policy(groups))).toThrow('Duplicate tool group identifier: files')
   })
 })

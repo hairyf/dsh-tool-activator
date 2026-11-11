@@ -36,8 +36,7 @@ const CSS = `
 .${CLASSES.groups}{display:grid;gap:10px}
 .${CLASSES.group}{display:grid;gap:0;border:.5px solid var(--dsw-alias-border-l4,rgba(127,127,127,.25));border-radius:12px;overflow:hidden}
 .${CLASSES.groupHeader}{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.06))}
-.${CLASSES.groupBody}{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;padding:0}
-.dsh-tool-activator-group-filter{flex:1 1 auto;min-width:120px}
+.${CLASSES.groupBody}{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;padding:12px}
 .${CLASSES.field}{display:grid;gap:4px;min-width:0}
 .${CLASSES.fieldWide}{grid-column:1/-1}
 .${CLASSES.fieldLabel}{color:var(--dsw-alias-label-secondary,inherit);font-size:12px}
@@ -54,16 +53,6 @@ const CSS = `
 .dsh-tool-activator-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
 .dsh-tool-activator-button:disabled{opacity:.5;cursor:default}
 .dsh-tool-activator-tooltip-anchor{display:inline-flex;align-items:center}
-.dsh-tool-activator-collapsible{display:grid;border:.5px solid var(--dsw-alias-border-l4,rgba(127,127,127,.25));border-radius:16px;overflow:hidden}
-.dsh-tool-activator-collapsible-header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.06))}
-.dsh-tool-activator-collapsible-toggle{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;padding:0;border:0;background:0 0;color:inherit;font:inherit;text-align:left;cursor:pointer}
-.dsh-tool-activator-collapsible-toggle:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}
-.dsh-tool-activator-collapsible-label{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,inherit);overflow-wrap:anywhere}
-.dsh-tool-activator-collapsible-chevron{display:inline-block;flex:0 0 auto;font-size:10px;line-height:1;color:var(--dsw-alias-label-caption,inherit);transition:transform .12s ease}
-.dsh-tool-activator-collapsible-chevron[data-open]{transform:rotate(90deg)}
-.dsh-tool-activator-collapsible-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
-.dsh-tool-activator-collapsible-body{display:grid;gap:8px;padding:10px 12px}
-.dsh-tool-activator-collapsible-body[hidden]{display:none}
 `
 
 export function ownedStyleTag(): HTMLStyleElement | null {

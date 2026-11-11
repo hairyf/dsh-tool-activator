@@ -5,12 +5,6 @@ export const CONFIGURATION_KEY = PACKAGE_NAME
 export const CONFIGURATION_REGISTRANT = PACKAGE_NAME
 export const CONFIGURATION_ENTRY_ID = CONFIG_ROW_ID
 export const STYLE_TAG_ID = 'dsh-tool-activator/config.css'
-
-/** The config schema's rule for `groups[].identifier`; the page gates Host writes on it. */
-export const GROUP_IDENTIFIER_PATTERN = /^[\w.-]+$/u
-
-/** How long a group edit settles before it is persisted, so typing stays responsive. */
-export const GROUPS_WRITE_DELAY_MS = 500
 export const TOOL_ACTIVATOR_REMOTE = 'toolActivator'
 
 export const CLASSES = {
@@ -41,12 +35,4 @@ export const CLASSES = {
   choices: 'dsh-tool-activator-choices',
   choice: 'dsh-tool-activator-choice',
   toolbar: 'dsh-tool-activator-toolbar',
-  collapsible: 'dsh-tool-activator-collapsible',
-  collapsibleHeader: 'dsh-tool-activator-collapsible-header',
-  collapsibleToggle: 'dsh-tool-activator-collapsible-toggle',
-  collapsibleLabel: 'dsh-tool-activator-collapsible-label',
-  collapsibleChevron: 'dsh-tool-activator-collapsible-chevron',
-  collapsibleActions: 'dsh-tool-activator-collapsible-actions',
-  collapsibleBody: 'dsh-tool-activator-collapsible-body',
-  groupFilter: 'dsh-tool-activator-group-filter',
 } as const
