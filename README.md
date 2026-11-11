@@ -19,9 +19,9 @@
 
 ## 核心行为
 
-默认基础工具为 `read`、`glob`、`grep`、`write`、`edit`、`skill`、`ask_user_question`、`todo_write`，均可取消默认加载；`activate_tools` 与 `deactivate_tools` 始终加载且锁定，任何分组都不能认领它们。
+默认基础工具为 `read`、`glob`、`grep`、`write`、`edit`、`skill`、`ask_user_question`、`todo_write`，均可取消默认加载；只有 `activate_tools` 始终加载且不可关闭。
 
-模型每次都看到：配置为默认加载的工具、已激活工具、`activate_tools` 与 `deactivate_tools`，以及其余工具的 `<available_tools>` 简述目录。披露是双向的：条目被释放后回到 `<available_tools>` 目录，模型需要时再激活一次。
+模型每次都看到：配置为默认加载的工具、已激活工具、`activate_tools`，以及其余工具的 `<available_tools>` 简述目录。
 
 ### 默认启用的工具
 
@@ -45,29 +45,13 @@
 
 此外，任意已安装插件的工具都可作为标识请求；开启 `autoGroupMcp` 时，`mcp__server__tool` 还会按 server 聚合为 `mcp.server`。
 
-实际可用集合将以 `<available_tools>` 目录呈现。该目录作为本插件自己的消息注入给模型，不占用宿主的运行时上下文快照，只有标识、名称和一句简述：
+实际可用集合将以 `<available_tools>` 目录呈现，该目录随提示词注入给模型，只有标识、名称和一句简述：
 
 ```xml
 <available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">
   <tool identifier="web_search" name="web_search">Search the public web for current information.</tool>
   <tool identifier="mcp.mail" name="mail">send: Send a message through the mailbox.</tool>
 </available_tools>
-```
-
-已激活的条目只保留标识符与可调用的成员名：工具描述已经在请求头的声明里，不必再重复一遍。
-
-```xml
-<activated_tools>
-  <tool identifier="mcp.mail" names="send,receive"/>
-</activated_tools>
-```
-
-卸载插件或删除分组后，重发的目录不再只靠开头一句 supersede 声明，而是追加 `<removed_tools>` 段点名消失的条目与成员名，模型据此认定旧行失效（被激活而离开可选目录的条目不算消失）：
-
-```xml
-<removed_tools description="These entries or members are no longer in the tool catalog; their plugin may have been uninstalled or the group rewritten. Ignore any earlier mention of them.">
-  <tool identifier="old_plugin" names="old_a,old_b"/>
-</removed_tools>
 ```
 
 模型可按需请求加载工具或组：
@@ -79,23 +63,17 @@
 }
 ```
 
-### 激活不重写请求头
+### 激活与请求头缓存
 
-路由声明支持对话中途变更工具时（`deepseek-flash` 等，见模型目录的 `toolUpdate`），插件把**全部**工具一次性声明出去：基础工具正常声明，其余标 `defer_loading`（不占上下文 token）。激活因此不改动声明列表，只在会话尾部追加一条 `tool_addition`，提供方此前缓存的前缀保持有效。
+**每次激活都会换一次请求头，提供方的上下文前缀缓存会在那一步失效。**
 
-不支持该能力的路由退回"按激活状态过滤声明列表"，功能不变，但每次新激活会重算一次请求头。
+这不是实现选择，而是 dsh $ge$ `0.2.2` 的宿主契约决定的：工具声明由宿主在 `system-prompt/assemble` 之后自己合并，插件在瀑布里写回 `tools` 会被无条件覆盖；宿主算声明用的又是当步的 admission（`tools.resolve()`）视图。插件隐藏未激活工具的唯一手段就是窄化 admission，而 admission 一变，声明表就变，宿主随即写一条 `reason: "change"` 的 `request/header`。
 
-### 模型按需整理分组（`group_tools`）
+因此：`0.2.0`–`0.2.1` 上那套「全量声明 + `defer_loading` + 只追加 `tool_addition`」的保头稳定路径，在 `0.2.2` 上无法生效。
 
-用户明确要求整理分组时，模型可调用 `group_tools`：
-
-* `action: "list"`：读当前作用域的分组与成员、尚未被任何分组认领的工具、基础工具与锁定工具。
-* `action: "apply"`：按 `ops` 增（`add`）、改（`update` 名称、说明、整组成员，或用 `rename` 换标识符）、删（`remove`）分组；一次调用里可以先把工具从旧组删掉、再加进新组。
-* `basic` 是默认存在的基础工具分组：只能 `update` 它的成员，`add` / `remove` 会被拒绝。
-
-写入落在插件配置的 `groups` 字段，与配置页「工具分组」区是同一份文档。一次调用要么全成、要么全不成：被拒的批次一次列出全部问题，配置一个字节不变。收据只回新增 / 改写 / 删除的标识符与改名映射，模型拿到新标识符即可直接激活。
-
-分组是用户的决定：**只在用户明确要求整理分组时调用该工具**，不要自作主张重组目录。
+- 代价是每次激活一次前缀重算；未激活的普通轮次不受影响，缓存正常累积。
+- 想减少换头次数，就把常用的工具直接设成**默认激活**，让会话一开始就把它们声明好。
+- 工具目录本身作为插件自己的消息追加在历史尾部，不参与请求头，重发不额外破坏缓存。
 
 ---
 
@@ -109,16 +87,14 @@
 
 | 分区 | 含义 |
 | --- | --- |
-| **默认激活** | 每次请求都带完整 schema 的工具；基础工具排在最前并带"基础工具"标记，但允许关闭；`activate_tools` 与 `deactivate_tools` 的开关固定开启且不可关闭 |
+| **默认激活** | 每次请求都带完整 schema 的工具；基础工具排在最前并带"基础工具"标记，但允许关闭；仅 `activate_tools` 的开关固定开启且不可关闭 |
 | **按需激活** | 其余工具，模型可使用 `activate_tools` 按需获取 |
 
-打开某一项的开关即把它写进 `basicTools`（默认加载），关闭则移回按需区；工具清单与描述由宿主 Remote `toolActivator/catalog` 提供，覆盖当前所有 live agent 作用域。该 Remote 同时返回 `uninstalledToolNames`：配置里仍挂着、但当前工具面已不存在的工具名（按会话注册的工具在没有存活会话时也会计入）。
+打开某一项的开关即把它写进 `basicTools`（默认加载），关闭则移回按需区；工具清单与描述由宿主 Remote `toolActivator/catalog` 提供，覆盖当前所有 live agent 作用域。
 
 **常规**区两个开关：`requireApproval`（非完全权限时激活前请求确认，缺少审批服务时直接拒绝；完全权限 `danger-full-access` 时无需确认，即使审批策略为 `never`）与 `autoGroupMcp`（按 `mcp__server__tool` 前缀聚合同一 MCP 服务）
 
-**工具分组**区是结构化编辑器：每个分组有标识符、名称、说明、工具勾选（只能从当前目录里的真实工具中选）和说明节绑定，支持增删；留空则每个工具各自成为条目。已卸载的成员带「已卸载」标注并可一键移除（持久化配置不被自动改动；整组成员都卸载时空分组不会保存）。默认激活区同样点名已卸载的基础工具并提供移除。`sectionTools` 仍留在 schema 里（进阶用法：说明节到工具名的依赖映射），但不再出现在表单中。
-
-**会话工具释放**区是会话级的回收策略，默认开启：空闲超过 6 轮没被用过的已激活条目会被本会话收回，已激活工具超过 24 个时按最久未用裁剪。两个数字都是大于等于 1 的整数，写坏了只留在页面上不写回宿主；关闭「启用被动释放」后两个输入框灰显。回收只影响本会话的已激活集合，不改动持久化的分组配置；模型也可以随时用 `deactivate_tools` 主动释放。
+**工具分组**区是结构化编辑器：每个分组有标识符、名称、说明、工具勾选（只能从当前目录里的真实工具中选）和说明节绑定，支持增删；留空则每个工具各自成为条目。`sectionTools` 仍留在 schema 里（进阶用法：说明节到工具名的依赖映射），但不再出现在表单中。
 
 ---
 
@@ -130,8 +106,8 @@
 
 ---
 
-* **测试情况**：2026-10-11 完全权限修复后，12 个文件、304 个用例全部通过；lint、类型检查与 Build 同样通过。
-* **未验证项**：真实 GUI E2E、打包发布及真实 profile 验证。
+* **测试情况**：2026-11-12 回退后，13 个文件、321 个用例全部通过；lint、类型检查与 Build 同样通过。
+* **未验证项**：真实 GUI E2E 与真实 profile 验证（本次发布未在真实 profile 中安装验证）。
 
 ---
 

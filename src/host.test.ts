@@ -1,21 +1,20 @@
 import type { Fiber } from '@deepseek-ai/cordis'
 import type { Agent, Inbox } from '@deepseek-ai/dsh-agent'
-import type { ToolCallId as CallId, ContentBlock, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { ToolCallId as CallId } from '@deepseek-ai/dsh-llm'
 import type { PtcRunRequest, PtcRunResult, PtcRunSpec } from '@deepseek-ai/dsh-ptc-runtime'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import type { ToolActivatorConfig } from './config'
 import type { ToolPolicy } from './shared'
-import type { ActivationCatalog } from './types'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
-import { createAssistantMessage, createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createToolResultMessage, projectToolUpdates, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
 import { SandboxPolicyService, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
-import { createScope, scopeTarget } from '@deepseek-ai/dsh-scope'
+import { createScope } from '@deepseek-ai/dsh-scope'
 import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SkillRegistry } from '@deepseek-ai/dsh-skill'
@@ -25,9 +24,8 @@ import { ApprovalService, setApprovalPolicy } from '@deepseek-ai/dsh-user-approv
 import { afterEach, describe, expect, it } from 'vitest'
 import { receiptFromContent } from './activation'
 import { Config } from './config'
-import { ACTIVATION_PROJECTION_KEY, ACTIVATOR_SOURCE_KIND, SETTINGS_REMOTE_NAMESPACE } from './constants'
+import { ACTIVATION_PROJECTION_KEY } from './constants'
 import * as plugin from './index'
-import { catalogMessages } from './injection'
 
 const cleanups: Array<() => unknown> = []
 /** Absolute on every platform; DSH rejects a session header whose cwd is not absolute. */
@@ -35,8 +33,6 @@ const FIXTURE_CWD = join(tmpdir(), 'isolated-activator-fixture')
 /** Registered by the fixture but absent from `DEFAULT_POLICY.basicTools`, so it stays on-demand. */
 const DISCOVERABLE_TOOL = 'pwsh'
 const DISCOVERABLE_GUIDE = 'PWSh FULL GUIDE'
-/** Registered into an agent own scope by another plugin, the way hashline tools are. */
-const AGENT_SCOPED_TOOL = 'agent_scoped'
 
 class IntegrationPtcRuntime extends PtcRuntime {
   language = 'typescript'
@@ -62,22 +58,6 @@ class IntegrationPtcRuntime extends PtcRuntime {
   }
 }
 
-/**
- * The settings service of a host, reduced to the calls the plugin makes. The
- * fixture has no real host behind it, so the service records what it was asked.
- */
-class FakeSettingsService {
-  revision = 3
-  readonly mutations: Array<{ ns: string, ops: ReadonlyArray<{ op: 'set', path: string[], value: unknown }>, expectedRevision?: number }> = []
-
-  describe(): Array<{ ns: string, revision: number }> {
-    return [{ ns: 'tool-activator', revision: this.revision }]
-  }
-
-  async mutate(ns: string, ops: ReadonlyArray<{ op: 'set', path: string[], value: unknown }>, expectedRevision?: number): Promise<void> {
-    this.mutations.push({ ns, ops, expectedRevision })
-  }
-}
 interface FixtureOptions {
   policy?: Parameters<typeof Config>[0]
   mode?: 'native' | 'ptc' | 'both'
@@ -87,12 +67,6 @@ interface FixtureOptions {
   skills?: boolean
   runtimeContext?: boolean
   spill?: boolean
-  /** Emulate dsh 0.2.2: the waterfall carries no tool declarations. */
-  withoutDeclarations?: boolean
-  /** Create the agent BEFORE the plugin loads, the way a restored session does. */
-  restoredAgent?: boolean
-  /** A fake host settings service; the plugin writes its groups through it. */
-  settings?: FakeSettingsService
 }
 
 interface Driver {
@@ -106,10 +80,7 @@ interface Fixture {
   fiber: Fiber
   ptc: IntegrationPtcRuntime | undefined
   makeAgent: (id: string, seed?: readonly SessionEvent[]) => Promise<Driver>
-  /** The agent that predates the plugin load, when the fixture created one. */
-  restored: Driver | undefined
   setPolicy: (changes: Partial<ToolPolicy>) => void
-  setHostContext: (text: string) => void
 }
 
 function unused(): never {
@@ -149,37 +120,39 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     }))
   }
   services.push(await ctx.plugin(ToolRuntime, { mode: options.mode ?? 'native' }))
-  // dsh 0.2.2 resolves a step admission before it assembles, and the provider
-  // reads THAT set instead of the registry. The rc.2 host has neither, so the
-  // fixture supplies the admission contract: a `resolve` that yields the scope's
-  // real face, which the plugin narrows to the enabled tools.
-  Object.defineProperty(ctx.tools, 'resolve', {
-    configurable: true,
-    writable: true,
-    value: async (context: { agent?: Agent }) => {
-      const visible = new Map(ctx.tools.schemas(context.agent).map(schema => [schema.name, schema]))
-      return {
-        dispose: () => { },
-        view: (scope?: unknown) => scope === context.agent ? visible : new Map(),
-      }
-    },
-  })
   if (options.approval)
     services.push(await ctx.plugin(ApprovalService, { policy: options.approvalPolicy ?? 'ask' }))
   if (options.skills)
     services.push(await ctx.plugin(SkillRegistry, {}))
-  if (options.settings) {
-    const settings = options.settings
-    services.push(await ctx.plugin((owner: Context) => {
-      owner.provide('settings', settings)
-    }))
-  }
   if (options.spill) {
     cleanups.push(ctx.on('tools/ptc-dispatch-log', async (_dispatch, next) => {
       await next()
       return [{ type: 'text', text: 'Spilled to a result locator' }]
     }))
   }
+  const fiber = await ctx.plugin({
+    name: plugin.name,
+    inject: plugin.inject,
+    apply(owner: Context): void {
+      plugin.apply(owner, config)
+    },
+  })
+  services.push(fiber)
+  for (const name of ['read', 'write', 'glob', 'grep', DISCOVERABLE_TOOL, 'web_search']) {
+    cleanups.push(ctx.tools.register(defineTool({
+      name,
+      description: `${name} description`,
+      parameters: { path: { type: 'string', required: true } },
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      execute: async args => `${name}:${args.path}`,
+    })))
+  }
+  for (const name of ['read', 'write'])
+    cleanups.push(ctx.systemPrompt.section({ name: `tool:${name}`, order: 100, text: `${name.toUpperCase()} FULL GUIDE` }))
+  cleanups.push(ctx.systemPrompt.section({ name: `tool:${DISCOVERABLE_TOOL}`, order: 100, text: DISCOVERABLE_GUIDE }))
+  cleanups.push(ctx.systemPrompt.section({ name: 'tool:web_search', order: 100, text: 'WEB SEARCH FULL GUIDE' }))
+  cleanups.push(ctx.systemPrompt.section({ name: 'host:safety', order: 1, text: 'HOST SAFETY NEVER REMOVED' }))
+  cleanups.push(ctx.systemPrompt.context({ name: 'host:runtime', order: 1, text: 'HOST RUNTIME NEVER REMOVED' }))
   let turn = 0
   const makeAgent = async (id: string, seed: readonly SessionEvent[] = []): Promise<Driver> => {
     const session = ctx.sessions.create(SessionId(id), { ...(seed.length === 0 ? {} : { seed }), meta: { cwd: FIXTURE_CWD } })
@@ -216,60 +189,13 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     session.append('step/start', { turn, step: 1 })
     return { agent, events, close }
   }
-  // A restored session's agent exists before the plugin loads, so it never sees
-  // `agent/created`: the case the lazy gate resolver exists for.
-  const restored = options.restoredAgent ? await makeAgent('restored') : undefined
-  const fiber = await ctx.plugin({
-    name: plugin.name,
-    inject: plugin.inject,
-    apply(owner: Context): void {
-      plugin.apply(owner, config)
-    },
-  })
-  services.push(fiber)
-  if (options.settings) {
-    // A plugin writes under the id of its own loader entry; the fixture has no
-    // loader, so the entry is faked on the plugin fiber.
-    Reflect.set(fiber, 'entry', { options: { id: 'tool-activator' } })
-  }
-  if (options.withoutDeclarations) {
-    // dsh 0.2.2 hands the waterfall a presentation WITHOUT tool declarations and
-    // merges the provider-owned schemas afterwards. Deleting the declarations in
-    // place emulates that contract for the rc.2 fixture. The hook has to run
-    // BEFORE the plugin's own probe — that probe reads the declarations off the
-    // payload to learn whether the host owns them — hence `prepend`.
-    cleanups.push(ctx.on('system-prompt/assemble', async (assembly, _context, next) => {
-      Reflect.deleteProperty(assembly, 'tools')
-      return next()
-    }, { prepend: true }))
-  }
-  for (const name of ['read', 'write', 'glob', 'grep', DISCOVERABLE_TOOL, 'web_search']) {
-    cleanups.push(ctx.tools.register(defineTool({
-      name,
-      description: `${name} description`,
-      parameters: { path: { type: 'string', required: true } },
-      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
-      execute: async args => `${name}:${args.path}`,
-    })))
-  }
-  for (const name of ['read', 'write'])
-    cleanups.push(ctx.systemPrompt.section({ name: `tool:${name}`, order: 100, text: `${name.toUpperCase()} FULL GUIDE` }))
-  cleanups.push(ctx.systemPrompt.section({ name: `tool:${DISCOVERABLE_TOOL}`, order: 100, text: DISCOVERABLE_GUIDE }))
-  cleanups.push(ctx.systemPrompt.section({ name: 'tool:web_search', order: 100, text: 'WEB SEARCH FULL GUIDE' }))
-  cleanups.push(ctx.systemPrompt.section({ name: 'host:safety', order: 1, text: 'HOST SAFETY NEVER REMOVED' }))
-  let hostContext = 'HOST RUNTIME NEVER REMOVED'
-  cleanups.push(ctx.systemPrompt.context({ name: 'host:runtime', order: 1, text: () => hostContext }))
   return {
     ctx,
     fiber,
     get ptc(): IntegrationPtcRuntime | undefined { return ptc },
     makeAgent,
-    restored,
     setPolicy(changes): void {
       current = Config(JSON.parse(JSON.stringify({ ...current, ...changes }))).get()
-    },
-    setHostContext(text: string): void {
-      hostContext = text
     },
   }
 }
@@ -303,91 +229,12 @@ async function call(ctx: Context, agent: Agent, name: string, args: unknown, id 
 
 async function presentation(ctx: Context, agent: Agent): Promise<{ names: string[], text: string }> {
   const assembly = await ctx.systemPrompt.assemble({ scope: agent, agent })
-  await admitStep(ctx, agent)
-  return { names: (assembly.tools ?? []).map(tool => tool.name), text: `${renderPrompt(assembly)}\n${renderContextSnapshot(assembly)}\n${catalogText(agent)}` }
-}
-
-/**
- * Admit one step the way the host does: the step waterfall decides which
- * messages enter the step, and the host appends them to the session.
- */
-async function admitStep(ctx: Context, agent: Agent): Promise<UserMessage[]> {
-  const decision = await ctx.waterfall(
-    scopeTarget(agent, agent),
-    'agent/pre-step',
-    { agent, messages: [], turn: 1, step: 1, signal: new AbortController().signal },
-    async () => ({ kind: 'enter' as const, messages: [] }),
-  )
-  if (decision.kind === 'reject')
-    return []
-  for (const message of decision.messages)
-    agent.session.append('user/message', message, { surfaceOp: 'append' })
-  return decision.messages
-}
-
-/** The catalog the model currently holds. */
-function catalogText(agent: Agent): string {
-  const messages = catalogMessages(agent)
-  const [block] = messages[messages.length - 1]?.content ?? []
-  return block?.type === 'text' ? block.text : ''
-}
-
-/** The tools one step may call: the model-facing face, not the registry's. */
-async function resolveStep(ctx: Context, agent: Agent): Promise<ReadonlyMap<string, unknown>> {
-  const tools = ctx.tools as unknown as {
-    resolve: (context: { agent: Agent, modelSelection: { provider: string, model: string }, signal: AbortSignal }) => Promise<{ view: (scope?: unknown) => ReadonlyMap<string, unknown> }>
-  }
-  const toolSet = await tools.resolve({ agent, modelSelection: { provider: 'fixture', model: 'fixture' }, signal: new AbortController().signal })
-  return toolSet.view(agent)
-}
-
-/** The model-facing text of one tool result. */
-function resultText(content: readonly ContentBlock[]): string {
-  return content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')
+  return { names: assembly.tools.map(tool => tool.name), text: `${renderPrompt(assembly)}\n${renderContextSnapshot(assembly)}` }
 }
 
 function closeTurn(session: Session): void {
   session.append('step/end', { turn: 1, step: 1 })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-}
-
-/**
- * Close the turn the session is in and open the next one, the way the host does
- * between two turns of a conversation.
- */
-function nextTurn(session: Session, turn: number): void {
-  session.append('step/end', { turn, step: 1 })
-  session.append('turn/end', { turn, reason: { kind: 'completed' } })
-  session.append('turn/start', { turn: turn + 1 })
-  session.append('step/start', { turn: turn + 1, step: 1 })
-}
-
-/**
- * One tool call, logged on the turn the model ran it on.
- *
- * The idle clock counts turns, so the call has to say which turn it belongs to.
- */
-async function callInTurn(ctx: Context, agent: Agent, turn: number, name: string, args: unknown, id: string): Promise<ReturnType<Context['tools']['execute']> extends Promise<infer T> ? T : never> {
-  const callId = ToolCallId(id)
-  const argumentsJson = JSON.stringify(args)
-  agent.session.append('assistant/message', {
-    turn,
-    step: 1,
-    message: createAssistantMessage({
-      content: [{ type: 'tool-call', id: callId, name, arguments: argumentsJson }],
-      source: { provider: 'fixture', model: 'fixture' },
-    }),
-    stream: [],
-  }, { surfaceOp: 'append' })
-  agent.session.append('tool/call', { turn, step: 1, name, callId, arguments: argumentsJson })
-  const result = await ctx.tools.execute({ agent, name, arguments: args, callId, signal: new AbortController().signal })
-  agent.session.append('tool/result', {
-    turn,
-    step: 1,
-    message: createToolResultMessage({ callId, content: result.content, isError: result.isError }),
-    ...(result.meta === undefined ? {} : { meta: result.meta }),
-  }, { surfaceOp: 'append' })
-  return result
 }
 
 function deferred<T>(): { promise: Promise<T>, resolve: (value: T) => void } {
@@ -408,7 +255,7 @@ describe('real rc.2 host contracts', () => {
     const { ctx, makeAgent } = await fixture()
     const { agent } = await makeAgent('initial')
     const initial = await presentation(ctx, agent)
-    expect(initial.names).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', 'read', 'write'])
+    expect(initial.names).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
     expect(initial.text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" name="${DISCOVERABLE_TOOL}">${DISCOVERABLE_TOOL}: ${DISCOVERABLE_TOOL} description</tool>`)
     expect(initial.text).toContain('READ FULL GUIDE')
     expect(initial.text).toContain('WRITE FULL GUIDE')
@@ -433,12 +280,10 @@ describe('real rc.2 host contracts', () => {
     })
     expect(events.map(event => event.type)).toEqual(['turn/start', 'step/start', 'assistant/message', 'tool/call', 'tool/result'])
     const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
+    expect(enabled.names).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
     expect(enabled.text).toContain(DISCOVERABLE_GUIDE)
     expect(enabled.text.match(/WRITE FULL GUIDE/gu)).toHaveLength(1)
-    expect(enabled.text).toContain('<available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">')
-    expect(enabled.text).toContain('  <tool identifier="group_tools" name="group_tools">')
-    expect(enabled.text).toContain('  <tool identifier="web_search" name="web_search">web_search: web_search description</tool>\n</available_tools>')
+    expect(enabled.text).toContain('<available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">\n  <tool identifier="web_search" name="web_search">web_search: web_search description</tool>\n</available_tools>')
     expect(enabled.text).not.toContain(`<tool identifier="${DISCOVERABLE_TOOL}" name="${DISCOVERABLE_TOOL}">`)
     const again = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL, 'missing'], reason: 'Check the tools' }, 'already-active')
     expect(receiptFromContent(again.content)?.state).toEqual({ activatedTools: [], activatedSkills: [], alreadyActive: [DISCOVERABLE_TOOL], notFound: ['missing'] })
@@ -464,8 +309,8 @@ describe('real rc.2 host contracts', () => {
     const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
     const restored = await makeAgent('restored-session', serialized)
     const fresh = await makeAgent('fresh-session')
-    expect((await presentation(ctx, restored.agent)).names).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
-    expect((await presentation(ctx, fresh.agent)).names).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', 'read', 'write'])
+    expect((await presentation(ctx, restored.agent)).names).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
+    expect((await presentation(ctx, fresh.agent)).names).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
   })
 
   it('restores only the current restricted scope and refuses unavailable identifiers', async () => {
@@ -533,9 +378,9 @@ describe('real rc.2 host contracts', () => {
     cleanups.push(ctx.systemPrompt.section({ name: 'plugin:files', order: 110, text: 'SHARED HIDDEN GUIDE' }))
     const { agent } = await makeAgent('grouped')
     const result = await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use file utilities' })
-    expect(receiptFromContent(result.content)?.state.activatedTools).toEqual([{ identifier: 'files', name: 'Files', apiCount: 3, tools: ['grep', 'pwsh', 'web_search'] }])
+    expect(receiptFromContent(result.content)?.state.activatedTools).toEqual([{ identifier: 'files', name: 'Files', apiCount: 3 }])
     const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'deactivate_tools', 'grep', 'pwsh', 'read', 'web_search'])
+    expect(enabled.names).toEqual(['activate_tools', 'grep', 'pwsh', 'read', 'web_search'])
     expect(enabled.text).not.toContain('SHARED HIDDEN GUIDE')
     expect(enabled.text).not.toContain('WRITE FULL GUIDE')
     expect(enabled.text).toContain('WEB SEARCH FULL GUIDE')
@@ -548,7 +393,7 @@ describe('real rc.2 host contracts', () => {
 
     setPolicy({ basicTools: [] })
     const pending = await presentation(ctx, agent)
-    expect(pending.names).toEqual(['activate_tools', 'deactivate_tools'])
+    expect(pending.names).toEqual(['activate_tools'])
     expect(pending.text).toContain('<tool identifier="read" name="read">')
     expect(pending.text).not.toContain('READ FULL GUIDE')
     expect(pending.text).not.toContain('WRITE FULL GUIDE')
@@ -556,12 +401,12 @@ describe('real rc.2 host contracts', () => {
     const result = await call(ctx, agent, 'activate_tools', { identifiers: ['read'], reason: 'Read a file on demand' })
     expect(result.isError).toBe(false)
     const activated = await presentation(ctx, agent)
-    expect(activated.names).toEqual(['activate_tools', 'deactivate_tools', 'read'])
+    expect(activated.names).toEqual(['activate_tools', 'read'])
     expect(activated.text).toContain('READ FULL GUIDE')
     expect(activated.text).not.toContain('WRITE FULL GUIDE')
 
     const fresh = await makeAgent('empty-basics-fresh')
-    expect((await presentation(ctx, fresh.agent)).names).toEqual(['activate_tools', 'deactivate_tools'])
+    expect((await presentation(ctx, fresh.agent)).names).toEqual(['activate_tools'])
   })
 
   it('keeps a committed activation when the configuration is unchanged', async () => {
@@ -577,81 +422,27 @@ describe('real rc.2 host contracts', () => {
     const { ctx, makeAgent } = await fixture()
     const { agent } = await makeAgent('scope-identity')
     await expect(ctx.systemPrompt.assemble({ scope: {}, agent })).rejects.toThrow('exact agent scope')
-    expect((await ctx.systemPrompt.assemble()).tools.map(tool => tool.name)).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', 'group_tools', DISCOVERABLE_TOOL, 'read', 'web_search', 'write'])
+    expect((await ctx.systemPrompt.assemble()).tools.map(tool => tool.name)).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'web_search', 'write'])
     const stale = { ...agent }
     await expect(ctx.systemPrompt.assemble({ scope: stale, agent: stale })).rejects.toThrow('exact live agent')
     expect((await call(ctx, stale, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })).isError).toBe(true)
   })
 
-  it('keeps the user complete prompt while delivering activated docs exactly once through the catalog', async () => {
+  it('keeps the user complete prompt while delivering activated docs exactly once through runtime context', async () => {
     const { ctx, makeAgent } = await fixture()
     cleanups.push(ctx.systemPrompt.section({ name: 'user:complete', order: 0, complete: true, text: 'USER COMPLETE PROMPT' }))
     const { agent } = await makeAgent('complete-prompt')
     await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
     const assembly = await ctx.systemPrompt.assemble({ scope: agent, agent })
     expect(renderPrompt(assembly)).toBe('USER COMPLETE PROMPT')
-    expect(renderContextSnapshot(assembly)).not.toContain(DISCOVERABLE_GUIDE)
-    const visible = await presentation(ctx, agent)
-    expect(visible.text.match(/PWSh FULL GUIDE/gu)).toHaveLength(1)
+    expect(renderContextSnapshot(assembly)).toContain(DISCOVERABLE_GUIDE)
+    expect((renderPrompt(assembly) + renderContextSnapshot(assembly)).match(/PWSh FULL GUIDE/gu)).toHaveLength(1)
   })
 
-  it('keeps publishing the catalog when the host suppresses its runtime context', async () => {
+  it('fails explicitly instead of silently removing schemas when runtime context is suppressed', async () => {
     const { ctx, makeAgent } = await fixture({ runtimeContext: false })
     const { agent } = await makeAgent('no-runtime-context')
-    const visible = await presentation(ctx, agent)
-    expect(visible.text).toContain('<available_tools')
-    expect(visible.text).not.toContain('HOST RUNTIME NEVER REMOVED')
-  })
-
-  it('publishes the catalog as its own message instead of a runtime context', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('own-injection')
-    const assembly = await ctx.systemPrompt.assemble({ scope: agent, agent })
-    expect(assembly.contexts.map(context => context.name)).toEqual(['host:runtime'])
-    await presentation(ctx, agent)
-    const published = catalogMessages(agent)
-    expect(published).toHaveLength(1)
-    expect(published[0]!.source).toMatchObject({ kind: ACTIVATOR_SOURCE_KIND, form: 'catalog' })
-    expect(catalogText(agent)).toContain('<available_tools')
-  })
-
-  it('does not publish the catalog again while nothing changed', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('stable-catalog')
-    await presentation(ctx, agent)
-    await presentation(ctx, agent)
-    expect(catalogMessages(agent)).toHaveLength(1)
-  })
-
-  it('publishes the catalog again once an activation changes it', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('changed-catalog')
-    await presentation(ctx, agent)
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    await presentation(ctx, agent)
-    expect(catalogMessages(agent)).toHaveLength(2)
-    expect(catalogText(agent)).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" names="${DISCOVERABLE_TOOL}"/>`)
-  })
-
-  it('keeps its catalog when another contributor changes the runtime context', async () => {
-    const { ctx, makeAgent, setHostContext } = await fixture()
-    const { agent } = await makeAgent('foreign-context')
-    await presentation(ctx, agent)
-    setHostContext('HOST RUNTIME CHANGED')
-    const visible = await presentation(ctx, agent)
-    expect(visible.text).toContain('HOST RUNTIME CHANGED')
-    expect(catalogMessages(agent)).toHaveLength(1)
-  })
-
-  it('does not publish the same catalog twice in a restored session', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const original = await makeAgent('catalog-source-session')
-    await presentation(ctx, original.agent)
-    closeTurn(original.agent.session)
-    const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
-    const restored = await makeAgent('catalog-restored-session', serialized)
-    await presentation(ctx, restored.agent)
-    expect(catalogMessages(restored.agent)).toHaveLength(1)
+    await expect(presentation(ctx, agent)).rejects.toThrow('requires runtime context')
   })
 
   it('unloads every registration and rebuilds durable state on plugin reload', async () => {
@@ -662,12 +453,10 @@ describe('real rc.2 host contracts', () => {
     expect(ctx.tools.get('activate_tools', agent)).toBeUndefined()
     expect(ctx.sessionProjections.stateOf(agent.session, 'tool-activator:activation')).toBeUndefined()
     const without = await ctx.systemPrompt.assemble({ scope: agent, agent })
-    // The plugin contributes no runtime context of its own: the catalog travels
-    // as its own message, so only the host's context is left.
-    expect(without.contexts.map(context => context.name)).toEqual(['host:runtime'])
+    expect(without.contexts.map(context => context.name)).not.toContain('tool-activator:context')
     const reloaded = await ctx.plugin({ inject: plugin.inject, apply: (owner: Context): void => plugin.apply(owner, Config({ requireApproval: false })) })
     cleanups.push(() => reloaded.dispose())
-    expect((await presentation(ctx, agent)).names).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
+    expect((await presentation(ctx, agent)).names).toEqual(['activate_tools', 'glob', 'grep', DISCOVERABLE_TOOL, 'read', 'write'])
   })
 })
 
@@ -980,8 +769,8 @@ describe('real skill fallback and result policy', () => {
   })
 })
 
-describe('activating a tool refreshes the declaration list for the next inference', () => {
-  it('declares the activated tool on the very next assembly instead of deferring it', async () => {
+describe('cache-stable declarations on a route that reads mid-conversation tool changes', () => {
+  it('announces the activation instead of rewriting the request head', async () => {
     const { ctx, makeAgent } = await fixture()
     cleanups.push(ctx.provide('llm', { resolveModelInfo: async () => ({ toolUpdate: 'addition-only' }) }))
     const { agent, events } = await makeAgent('appending-head')
@@ -997,12 +786,9 @@ describe('activating a tool refreshes the declaration list for the next inferenc
     expect(result.isError, JSON.stringify(result)).toBe(false)
 
     const after = await ctx.systemPrompt.assemble({ scope: agent, agent })
-    // The commit installs the gate; the assembly hook would be too late, because a
-    // step resolves its tool set BEFORE assembling. So the first assembly after the
-    // activation — the one this inference is built from — already carries the tool.
-    // It arrives as an addition (`deferLoading`), which is how this route declares
-    // anything absent from the request head; that flag does not withhold it.
-    expect(after.tools.map(tool => tool.name)).toContain(DISCOVERABLE_TOOL)
+    expect(after.tools).toEqual(initial.tools)
+    expect(after.tools.find(tool => tool.name === DISCOVERABLE_TOOL)?.deferLoading).toBe(true)
+    expect(after.tools.filter(tool => tool.deferLoading !== true).map(tool => tool.name)).toEqual(['activate_tools', 'glob', 'grep', 'read', 'write'])
 
     const announcement = events.filter(event => event.type === 'developer/message')
     expect(announcement).toHaveLength(1)
@@ -1010,6 +796,12 @@ describe('activating a tool refreshes the declaration list for the next inferenc
       headerSeq,
       message: { source: { kind: 'tool-activator' }, content: [{ type: 'tool-addition', toolName: DISCOVERABLE_TOOL }] },
     })
+
+    // The wire projection keeps the stable declaration list and serves the
+    // addition after it, which is exactly what preserves the cached prefix.
+    const projected = projectToolUpdates(agent.session.deriveMessages(), after.tools, 'addition-only', agent.session.toolHistory())
+    expect(projected.tools?.map(tool => tool.name)).toEqual(initial.tools.map(tool => tool.name))
+    expect(projected.messages.filter(message => message.role === 'developer')).toHaveLength(1)
   })
 
   it('announces each newly enabled tool once and never re-announces it', async () => {
@@ -1066,848 +858,5 @@ describe('activating a tool refreshes the declaration list for the next inferenc
     await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
     expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
     expect(events.filter(event => event.type === 'developer/message')).toHaveLength(0)
-  })
-})
-
-/**
- * dsh 0.2.2 hands the waterfall a presentation WITHOUT tool declarations and
- * merges the provider-owned schemas afterwards, so the plugin hides through the
- * view gate instead of rewriting the assembly. The rc.2 fixture still owns the
- * declarations, so this block emulates the newer contract instead.
- */
-describe('the 0.2.2 contract: the waterfall carries no tool declarations', () => {
-  it('keeps the restored activations visible on the very first read of a restored session', async () => {
-    const { ctx, makeAgent } = await fixture({ withoutDeclarations: true })
-    // The host contract is learned from the first scoped assembly; in production
-    // the load-time probe already knows it.
-    const { agent: probe } = await makeAgent('contract-probe')
-    await ctx.systemPrompt.assemble({ scope: probe, agent: probe })
-    const original = await makeAgent('source-session')
-    await call(ctx, original.agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    closeTurn(original.agent.session)
-    const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
-    const restored = await makeAgent('restored-session', serialized)
-    // The first request after a restart resolves its tool set before anything
-    // else: the tools the session already activated must still be admitted.
-    const admitted = await resolveStep(ctx, restored.agent)
-    expect([...admitted.keys()]).toContain(DISCOVERABLE_TOOL)
-  })
-  it('keeps the discoverable directory whole in the first prompt of a new session', async () => {
-    const { ctx, makeAgent } = await fixture({ withoutDeclarations: true })
-    const { agent } = await makeAgent('new-session')
-
-    const { text } = await presentation(ctx, agent)
-    // The directory is what makes `activate_tools` usable at all: the model has to
-    // see which tools exist before it can ask for them.
-    expect(text).toContain('<available_tools description="These tools are installed but not yet enabled. Use activate_tools to enable them when needed.">')
-    expect(text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" name="${DISCOVERABLE_TOOL}">`)
-  })
-
-  it('lists a tool another plugin registered into the agent scope', async () => {
-    const { ctx, makeAgent } = await fixture({ withoutDeclarations: true })
-    const { agent } = await makeAgent('agent-scoped-tool')
-    await ctx.systemPrompt.assemble({ scope: agent, agent })
-    // The agent's own scope is where another plugin puts a per-agent tool:
-    // `agent.ctx.tools` needs an inject declaration, so read the service instead.
-    const agentTools = (agent.ctx as unknown as { get: (key: string) => { register: (definition: unknown) => () => void } }).get('tools')
-    cleanups.push(agentTools.register(defineTool({
-      name: AGENT_SCOPED_TOOL,
-      description: 'Registered into the agent scope by another plugin',
-      parameters: { path: { type: 'string', required: true } },
-      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
-      execute: async args => `${AGENT_SCOPED_TOOL}:${args.path}`,
-    })))
-    // The settings page reads the registry's real face: a tool another plugin put
-    // into the agent scope has to be listed, or the user can never activate it.
-    const remote = (ctx as unknown as { get: (key: string) => { catalog: () => ActivationCatalog } }).get(SETTINGS_REMOTE_NAMESPACE)
-    const catalog = remote.catalog()
-    expect(catalog.entries.some(entry => entry.tools.includes(AGENT_SCOPED_TOOL))).toBe(true)
-  })
-
-  it('hides the un-activated tools on the first read of a restored agent', async () => {
-    const { ctx, makeAgent, restored } = await fixture({ withoutDeclarations: true, restoredAgent: true })
-    // The host contract is learned from the first scoped assembly; in production
-    // the load-time probe already knows it.
-    const { agent: probe } = await makeAgent('contract-probe')
-    await ctx.systemPrompt.assemble({ scope: probe, agent: probe })
-    // A step resolves its tool set before it assembles, so this resolution is the one
-    // that has to be narrowed: the agent predates the plugin, so it never saw
-    // `agent/created`.
-    const admitted = await resolveStep(ctx, restored!.agent)
-    expect([...admitted.keys()]).not.toContain(DISCOVERABLE_TOOL)
-    // The registry keeps its truth: the tool is registered, only the model may not
-    // call it yet. A plugin that registers a per-agent tool reads it back here.
-    expect(ctx.tools.schemas(restored!.agent).map(schema => schema.name)).toContain(DISCOVERABLE_TOOL)
-  })
-})
-
-/**
- * A group is not a stable name for the tools it carries: the user may rename it,
- * split it or delete it while the session runs. The tools the session activated
- * must survive that, so the activation is accounted by tool name.
- */
-describe('activation survives a changed group', () => {
-  const fileGroup = { identifier: 'files', name: 'Files', description: 'File utilities', tools: ['pwsh', 'web_search'], sections: [] }
-
-  it('keeps the activated tools callable after their group was renamed', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ policy: { groups: [fileGroup] } })
-    const { agent } = await makeAgent('group-renamed')
-    const activated = await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' })
-    expect(activated.isError, JSON.stringify(activated)).toBe(false)
-    expect(receiptFromContent(activated.content)?.state.activatedTools).toEqual([
-      { identifier: 'files', name: 'Files', apiCount: 2, tools: ['pwsh', 'web_search'] },
-    ])
-
-    setPolicy({ groups: [{ ...fileGroup, identifier: 'file-tools', name: 'File tools' }] })
-
-    const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', 'pwsh', 'read', 'web_search', 'write'])
-  })
-
-  it('presents a renamed group as activated under its new identifier', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ policy: { groups: [fileGroup] } })
-    const { agent } = await makeAgent('group-renamed-presentation')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' })
-
-    setPolicy({ groups: [{ ...fileGroup, identifier: 'file-tools', name: 'File tools' }] })
-
-    const after = await presentation(ctx, agent)
-    expect(after.text).toContain('<tool identifier="file-tools" names="pwsh,web_search"/>')
-    // Every member is still active, so the directory must not offer the group again.
-    expect(after.text).not.toContain('<tool identifier="file-tools" name=')
-  })
-
-  it('does not offer the members of a deleted group as unclaimed entries', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ policy: { groups: [fileGroup] } })
-    const { agent } = await makeAgent('group-deleted-presentation')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' })
-
-    setPolicy({ groups: [] })
-
-    const after = await presentation(ctx, agent)
-    expect(after.text).not.toContain('<tool identifier="pwsh" name=')
-    expect(after.text).not.toContain('<tool identifier="web_search" name=')
-  })
-
-  it('keeps the activated tools callable after their group was split', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ policy: { groups: [fileGroup] } })
-    const { agent } = await makeAgent('group-split')
-    const activated = await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' })
-    expect(activated.isError, JSON.stringify(activated)).toBe(false)
-
-    setPolicy({ groups: [{ ...fileGroup, identifier: 'files', tools: ['pwsh'] }, { ...fileGroup, identifier: 'web', name: 'Web', tools: ['web_search'] }] })
-
-    const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', 'pwsh', 'read', 'web_search', 'write'])
-  })
-
-  it('keeps the activated tools callable after their group was deleted', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ policy: { groups: [fileGroup] } })
-    const { agent } = await makeAgent('group-deleted')
-    const activated = await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' })
-    expect(activated.isError, JSON.stringify(activated)).toBe(false)
-
-    setPolicy({ groups: [] })
-
-    const enabled = await presentation(ctx, agent)
-    expect(enabled.names).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', 'pwsh', 'read', 'web_search', 'write'])
-  })
-
-  it('reports a renamed group as already active instead of activating it again', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ policy: { groups: [fileGroup] } })
-    const { agent } = await makeAgent('group-already-active')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' })
-
-    setPolicy({ groups: [{ ...fileGroup, identifier: 'file-tools', name: 'File tools' }] })
-
-    const again = await call(ctx, agent, 'activate_tools', { identifiers: ['file-tools'], reason: 'Use the file utilities again' })
-    expect(receiptFromContent(again.content)?.state).toEqual({
-      activatedSkills: [],
-      activatedTools: [],
-      alreadyActive: ['file-tools'],
-      notFound: [],
-    })
-  })
-
-  it('restores the activated tools of a session whose group was renamed', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ policy: { groups: [fileGroup] } })
-    const original = await makeAgent('group-source-session')
-    await call(ctx, original.agent, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' })
-    closeTurn(original.agent.session)
-    const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
-
-    setPolicy({ groups: [{ ...fileGroup, identifier: 'file-tools', name: 'File tools' }] })
-    const restored = await makeAgent('group-restored-session', serialized)
-
-    const enabled = await presentation(ctx, restored.agent)
-    expect(enabled.names).toEqual(['activate_tools', 'deactivate_tools', 'glob', 'grep', 'pwsh', 'read', 'web_search', 'write'])
-  })
-})
-
-/**
- * The grouping tool is the one tool that reshapes the catalog: it has to be
- * discoverable, callable once it was activated, and honest about the half of
- * its contract that this release does not implement yet.
- */
-describe('the grouping tool', () => {
-  const fileGroup = { identifier: 'files', name: 'Files', description: 'File utilities', tools: ['pwsh', 'gone'], sections: [] }
-
-  it('is discoverable in the pending catalog and callable once it was activated', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('grouping')
-    const directory = await presentation(ctx, agent)
-    expect(directory.text).toContain('  <tool identifier="group_tools" name="group_tools">')
-    expect(directory.names).not.toContain('group_tools')
-
-    const activated = await call(ctx, agent, 'activate_tools', { identifiers: ['group_tools'], reason: 'Organize the tools' })
-    expect(activated.isError, JSON.stringify(activated)).toBe(false)
-    expect((await presentation(ctx, agent)).names).toContain('group_tools')
-
-    const listed = await call(ctx, agent, 'group_tools', { action: 'list' }, 'grouping-list')
-    expect(listed.isError, JSON.stringify(listed)).toBe(false)
-    const value = JSON.parse(resultText(listed.content))
-    expect(value.action).toBe('list')
-    // The always-loaded tools are addressed as a group of their own, so they head the list.
-    expect(value.groups).toHaveLength(1)
-    expect(value.groups[0]).toMatchObject({ identifier: 'basic', name: 'Basic tools' })
-    expect(value.unclaimed).toEqual(['pwsh', 'web_search'])
-    expect(value.basic).toEqual(['ask_user_question', 'edit', 'glob', 'grep', 'read', 'skill', 'todo_write', 'write'])
-    expect(value.locked).toEqual(['activate_tools', 'deactivate_tools', 'group_tools', 'run_code'])
-  })
-
-  it('reports the configured groups with the members that no longer exist', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { groups: [fileGroup] } })
-    const { agent } = await makeAgent('grouping-groups')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['group_tools'], reason: 'Organize the tools' })
-
-    const listed = await call(ctx, agent, 'group_tools', { action: 'list' }, 'grouping-groups-list')
-    expect(listed.isError, JSON.stringify(listed)).toBe(false)
-    const value = JSON.parse(resultText(listed.content))
-    expect(value.action).toBe('list')
-    expect(value.groups.map((group: { identifier: string }) => group.identifier)).toEqual(['basic', 'files'])
-    expect(value.groups[1]).toEqual({ identifier: 'files', name: 'Files', description: 'File utilities', tools: [{ name: 'pwsh' }, { name: 'gone', missing: true }] })
-    expect(value.unclaimed).toEqual(['web_search'])
-    expect(value.basic).toEqual(['ask_user_question', 'edit', 'glob', 'grep', 'read', 'skill', 'todo_write', 'write'])
-    expect(value.locked).toEqual(['activate_tools', 'deactivate_tools', 'group_tools', 'run_code'])
-  })
-
-  it('writes an accepted batch into the host configuration and answers with the receipt', async () => {
-    const settings = new FakeSettingsService()
-    const { ctx, makeAgent } = await fixture({ settings })
-    const { agent } = await makeAgent('grouping-apply-write')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['group_tools'], reason: 'Organize the tools' })
-
-    const applied = await call(ctx, agent, 'group_tools', { action: 'apply', ops: [{ op: 'add', identifier: 'new', name: 'New', description: 'A new group', tools: ['pwsh'] }] }, 'grouping-apply-write-call')
-    expect(applied.isError, JSON.stringify(applied)).toBe(false)
-    expect(JSON.parse(resultText(applied.content))).toEqual({
-      action: 'apply',
-      receipt: { created: ['new'], updated: [], removed: [], renamed: [], unchanged: [] },
-    })
-    expect(settings.mutations).toHaveLength(1)
-    expect(settings.mutations[0]?.ns).toBe('tool-activator')
-    expect(settings.mutations[0]?.expectedRevision).toBe(3)
-    expect(settings.mutations[0]?.ops).toEqual([
-      { op: 'set', path: ['groups'], value: [{ identifier: 'new', name: 'New', description: 'A new group', tools: ['pwsh'], sections: [] }] },
-    ])
-  })
-
-  it('renames a group in the host configuration and answers with the rename mapping', async () => {
-    const settings = new FakeSettingsService()
-    const { ctx, makeAgent } = await fixture({
-      settings,
-      policy: { groups: [{ identifier: 'files', name: 'Files', description: 'File utilities', tools: ['pwsh'], sections: [] }] },
-    })
-    const { agent } = await makeAgent('grouping-apply-rename')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['group_tools'], reason: 'Organize the tools' })
-
-    const applied = await call(ctx, agent, 'group_tools', { action: 'apply', ops: [{ op: 'update', identifier: 'files', rename: 'file-tools', name: 'File tools' }] }, 'grouping-apply-rename-call')
-    expect(applied.isError, JSON.stringify(applied)).toBe(false)
-    expect(JSON.parse(resultText(applied.content))).toEqual({
-      action: 'apply',
-      receipt: { created: [], updated: ['file-tools'], removed: [], renamed: [{ from: 'files', to: 'file-tools' }], unchanged: [] },
-    })
-    expect(settings.mutations).toHaveLength(1)
-    expect(settings.mutations[0]?.ns).toBe('tool-activator')
-    expect(settings.mutations[0]?.ops).toEqual([
-      { op: 'set', path: ['groups'], value: [{ identifier: 'file-tools', name: 'File tools', description: 'File utilities', tools: ['pwsh'], sections: [] }] },
-    ])
-  })
-
-  it('reports every problem of a rejected batch and writes nothing', async () => {
-    const settings = new FakeSettingsService()
-    const { ctx, makeAgent } = await fixture({ settings })
-    const { agent } = await makeAgent('grouping-apply-rejected')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['group_tools'], reason: 'Organize the tools' })
-
-    const applied = await call(ctx, agent, 'group_tools', { action: 'apply', ops: [{ op: 'add', identifier: 'bad id', tools: [] }] }, 'grouping-apply-rejected-call')
-    expect(applied.isError, JSON.stringify(applied)).toBe(false)
-    const value = JSON.parse(resultText(applied.content))
-    expect(value.action).toBe('apply')
-    expect(value.problems.map((problem: { kind: string }) => problem.kind)).toEqual(['invalid-identifier', 'empty-tools'])
-    expect(settings.mutations).toEqual([])
-  })
-
-  it('refuses an apply with no operation instead of answering with an empty receipt', async () => {
-    const settings = new FakeSettingsService()
-    const { ctx, makeAgent } = await fixture({ settings })
-    const { agent } = await makeAgent('grouping-empty-apply')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['group_tools'], reason: 'Organize the tools' })
-
-    const applied = await call(ctx, agent, 'group_tools', { action: 'apply', ops: [] }, 'grouping-empty-apply-call')
-    expect(applied.isError).toBe(true)
-    expect(applied.error?.message).toContain('needs at least one operation')
-    expect(settings.mutations).toEqual([])
-  })
-
-  it('refuses to write when the host does not provide a settings service', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('grouping-apply')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['group_tools'], reason: 'Organize the tools' })
-
-    const applied = await call(ctx, agent, 'group_tools', { action: 'apply', ops: [{ op: 'add', identifier: 'new', name: 'New', description: 'A new group', tools: ['pwsh'] }] }, 'grouping-apply-call')
-    expect(applied.isError).toBe(true)
-    expect(applied.error?.message).toContain('this host does not provide the settings service')
-    expect(applied.error?.message).toContain('no change was made')
-  })
-})
-
-/**
- * The release tool is the other half of the activation contract: what the
- * model activated, it can give back, and the session keeps the difference.
- */
-describe('the release tool', () => {
-  const releaseGroup = { identifier: 'files', name: 'Files', description: 'File utilities', tools: [DISCOVERABLE_TOOL, 'web_search'], sections: [] }
-
-  it('takes an activated tool out of the model face and puts its entry back into the directory', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('release')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
-
-    const released = await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, 'release-call')
-    expect(released.isError, JSON.stringify(released)).toBe(false)
-    expect(JSON.parse(resultText(released.content))).toEqual({
-      success: true,
-      released: { identifiers: [DISCOVERABLE_TOOL], toolNames: [DISCOVERABLE_TOOL] },
-      refused: [],
-      notFound: [],
-      alreadyReleased: [],
-    })
-
-    const after = await presentation(ctx, agent)
-    expect(after.names).not.toContain(DISCOVERABLE_TOOL)
-    expect(after.text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" name="${DISCOVERABLE_TOOL}">`)
-  })
-
-  it('hides the released tool from the very next step admission', async () => {
-    const { ctx, makeAgent } = await fixture({ withoutDeclarations: true })
-    const { agent } = await makeAgent('release-admission')
-    await ctx.systemPrompt.assemble({ scope: agent, agent })
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    expect([...(await resolveStep(ctx, agent)).keys()]).toContain(DISCOVERABLE_TOOL)
-
-    await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, 'release-admission-call')
-    expect([...(await resolveStep(ctx, agent)).keys()]).not.toContain(DISCOVERABLE_TOOL)
-  })
-
-  it('takes the released tool out of the model face before the durable result lands', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('release-before-durable')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
-
-    // The release call runs, but its durable result does not land yet: the
-    // account has not folded it, so the release has to hold on its own.
-    const callId = ToolCallId('release-not-yet-logged')
-    startCall(agent.session, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, callId)
-    const result = await ctx.tools.execute({ agent, name: 'deactivate_tools', arguments: { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, callId, signal: new AbortController().signal })
-    expect(result.isError, JSON.stringify(result)).toBe(false)
-    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
-  })
-
-  it('releases a whole group by its identifier', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { groups: [releaseGroup] } })
-    const { agent } = await makeAgent('release-group')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' })
-    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
-
-    const released = await call(ctx, agent, 'deactivate_tools', { identifiers: ['files'], reason: 'The file utilities are not needed any more' }, 'release-group-call')
-    expect(released.isError, JSON.stringify(released)).toBe(false)
-    const value = JSON.parse(resultText(released.content))
-    expect(value.success).toBe(true)
-    expect(value.released).toEqual({ identifiers: ['files'], toolNames: [DISCOVERABLE_TOOL, 'web_search'] })
-
-    const after = await presentation(ctx, agent)
-    expect(after.names).not.toContain(DISCOVERABLE_TOOL)
-    expect(after.names).not.toContain('web_search')
-  })
-
-  it('refuses the basic tools, the locked tools and a tool an activated group provides', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { groups: [releaseGroup] } })
-    const { agent } = await makeAgent('release-refused')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' })
-
-    const released = await call(ctx, agent, 'deactivate_tools', { identifiers: ['read', 'group_tools', DISCOVERABLE_TOOL], reason: 'Clean up' }, 'release-refused-call')
-    expect(released.isError, JSON.stringify(released)).toBe(false)
-    const value = JSON.parse(resultText(released.content))
-    expect(value.success).toBe(false)
-    expect(value.released).toEqual({ identifiers: [], toolNames: [] })
-    expect(value.refused.map((item: { identifier: string }) => item.identifier)).toEqual(['read', 'group_tools', DISCOVERABLE_TOOL])
-    expect(value.refused[0].reason).toContain('basic tool')
-    expect(value.refused[1].reason).toContain('locked')
-    // The tool an activated group provides is not taken out of the group behind
-    // the model's back: the model is told which identifier to release instead.
-    expect(value.refused[2].reason).toContain('files')
-    expect(value.alreadyReleased).toEqual([])
-    expect(value.notFound).toEqual([])
-    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
-  })
-
-  it('answers an unknown identifier with notFound and still releases the rest of the batch', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('release-partial')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-
-    const released = await call(ctx, agent, 'deactivate_tools', { identifiers: ['no-such-tool', DISCOVERABLE_TOOL], reason: 'Clean up' }, 'release-partial-call')
-    expect(released.isError, JSON.stringify(released)).toBe(false)
-    const value = JSON.parse(resultText(released.content))
-    expect(value.success).toBe(true)
-    expect(value.notFound).toEqual(['no-such-tool'])
-    expect(value.released.identifiers).toEqual([DISCOVERABLE_TOOL])
-    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
-  })
-
-  it('is idempotent for an entry the session never activated and for one it already released', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('release-idempotent')
-
-    const never = await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Nothing to release' }, 'release-idempotent-first')
-    expect(never.isError, JSON.stringify(never)).toBe(false)
-    const neverValue = JSON.parse(resultText(never.content))
-    expect(neverValue.success).toBe(true)
-    expect(neverValue.alreadyReleased).toEqual([DISCOVERABLE_TOOL])
-    expect(neverValue.released).toEqual({ identifiers: [], toolNames: [] })
-
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, 'release-idempotent-second')
-    const again = await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, 'release-idempotent-third')
-    expect(again.isError, JSON.stringify(again)).toBe(false)
-    const againValue = JSON.parse(resultText(again.content))
-    expect(againValue.success).toBe(true)
-    expect(againValue.alreadyReleased).toEqual([DISCOVERABLE_TOOL])
-    expect(againValue.released).toEqual({ identifiers: [], toolNames: [] })
-  })
-
-  it('requires a reason and never asks the user for approval', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ approval: true, approvalPolicy: 'ask' })
-    const { agent, events } = await makeAgent('release-approval')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    setPolicy({ requireApproval: true })
-
-    const withoutReason = await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL] }, 'release-approval-missing-reason')
-    expect(withoutReason.isError).toBe(true)
-    expect(withoutReason.error?.message).toContain('missing required property "reason"')
-
-    const released = await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, 'release-approval-call')
-    expect(released.isError, JSON.stringify(released)).toBe(false)
-    expect(events.some(event => event.type === 'approval/asked')).toBe(false)
-  })
-
-  it('publishes the release in the catalog message with the reason the model gave', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('release-catalog')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, 'release-catalog-call')
-
-    const visible = await presentation(ctx, agent)
-    expect(visible.text).toContain('<released_tools description=')
-    expect(visible.text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" names="${DISCOVERABLE_TOOL}" kind="active" reason="The shell is not needed any more"/>`)
-    // An uninstalled tool is a different thing and never wears this wording.
-    expect(visible.text).not.toContain('removed_tools')
-
-    const published = catalogMessages(agent)
-    expect(published[published.length - 1]!.source).toMatchObject({
-      released: [{ identifier: DISCOVERABLE_TOOL, names: [DISCOVERABLE_TOOL], reason: { kind: 'active', text: 'The shell is not needed any more' } }],
-    })
-  })
-
-  it('publishes the catalog exactly once after a release and does not repeat it', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('release-once')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    await presentation(ctx, agent)
-    await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, 'release-once-call')
-
-    await presentation(ctx, agent)
-    const released = catalogMessages(agent).filter(message => message.content.some(block => block.type === 'text' && block.text.includes('<released_tools description=')))
-    // The release changed the catalog once, so exactly one message carries it.
-    expect(released).toHaveLength(1)
-    const published = catalogMessages(agent).length
-
-    // Nothing changed in the next step, so the catalog is not published again:
-    // the released section is an increment, not a part of the catalog state.
-    await presentation(ctx, agent)
-    expect(catalogMessages(agent)).toHaveLength(published)
-  })
-
-  it('lets the session activate a released entry again', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const { agent } = await makeAgent('release-again')
-    await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    await call(ctx, agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, 'release-again-call')
-    expect((await presentation(ctx, agent)).names).not.toContain(DISCOVERABLE_TOOL)
-
-    const again = await call(ctx, agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is needed once more' }, 'release-again-activate')
-    expect(again.isError, JSON.stringify(again)).toBe(false)
-    expect((await presentation(ctx, agent)).names).toContain(DISCOVERABLE_TOOL)
-  })
-
-  it('is locked: no group may claim the release tool', async () => {
-    const { ctx, makeAgent } = await fixture({ settings: new FakeSettingsService() })
-    const { agent } = await makeAgent('release-locked')
-    await call(ctx, agent, 'activate_tools', { identifiers: ['group_tools'], reason: 'Organize the tools' })
-
-    const applied = await call(ctx, agent, 'group_tools', { action: 'apply', ops: [{ op: 'add', identifier: 'mine', name: 'Mine', description: 'A group of my own', tools: ['deactivate_tools'] }] }, 'release-locked-call')
-    expect(applied.isError, JSON.stringify(applied)).toBe(false)
-    const value = JSON.parse(resultText(applied.content))
-    expect(value.problems.map((problem: { kind: string }) => problem.kind)).toEqual(['locked-tool'])
-  })
-
-  it('does not bring a released tool back when the session is restored', async () => {
-    const { ctx, makeAgent } = await fixture()
-    const original = await makeAgent('release-source')
-    await call(ctx, original.agent, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' })
-    await call(ctx, original.agent, 'deactivate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'The shell is not needed any more' }, 'release-source-call')
-    await presentation(ctx, original.agent)
-    closeTurn(original.agent.session)
-    const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
-
-    const restored = await makeAgent('release-restored', serialized)
-    expect((await presentation(ctx, restored.agent)).names).not.toContain(DISCOVERABLE_TOOL)
-  })
-})
-
-/**
- * The passive policy is the other half of the release contract: an activation
- * nobody uses is reclaimed after a few idle turns, and the model is told which
- * entry went away and why.
- */
-describe('the passive idle release', () => {
-  const idlePolicy = { enabled: true, idleTurns: 2, maxActivatedTools: 24 }
-  const idleGroup = { identifier: 'files', name: 'Files', description: 'File utilities', tools: [DISCOVERABLE_TOOL, 'web_search'], sections: [] }
-
-  it('keeps an activation that is one turn short of the idle threshold', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { passiveRelease: idlePolicy } })
-    const { agent } = await makeAgent('idle-boundary')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-boundary-activate')
-    nextTurn(agent.session, 1)
-    nextTurn(agent.session, 2)
-
-    const after = await presentation(ctx, agent)
-    // Two idle turns are what the policy allows; the entry is still there.
-    expect(after.names).toContain(DISCOVERABLE_TOOL)
-    expect(after.text).not.toContain('<released_tools description=')
-  })
-
-  it('reclaims an activation that went idle and names it in the catalog', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { passiveRelease: idlePolicy } })
-    const { agent } = await makeAgent('idle-reclaim')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-reclaim-activate')
-    nextTurn(agent.session, 1)
-    nextTurn(agent.session, 2)
-    nextTurn(agent.session, 3)
-
-    const after = await presentation(ctx, agent)
-    expect(after.names).not.toContain(DISCOVERABLE_TOOL)
-    expect(after.text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" names="${DISCOVERABLE_TOOL}" kind="idle" reason="idle 3 turns"/>`)
-    // The entry is back in the directory, and the wording of an uninstalled tool
-    // never appears: this is a session release, not a missing plugin.
-    expect(after.text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" name="${DISCOVERABLE_TOOL}">`)
-    expect(after.text).not.toContain('removed_tools')
-
-    const published = catalogMessages(agent)
-    expect(published[published.length - 1]!.source).toMatchObject({
-      released: [{ identifier: DISCOVERABLE_TOOL, names: [DISCOVERABLE_TOOL], reason: { kind: 'idle', text: 'idle 3 turns' } }],
-    })
-  })
-
-  it('refreshes the clock of an entry when one of its members is called', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { groups: [idleGroup], passiveRelease: idlePolicy } })
-    const { agent } = await makeAgent('idle-member')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' }, 'idle-member-activate')
-    nextTurn(agent.session, 1)
-    nextTurn(agent.session, 2)
-    // A member of the group runs on turn 3, so the entry is used again.
-    await callInTurn(ctx, agent, 3, DISCOVERABLE_TOOL, { path: 'tmp' }, 'idle-member-call')
-    nextTurn(agent.session, 3)
-
-    const after = await presentation(ctx, agent)
-    expect(after.names).toContain(DISCOVERABLE_TOOL)
-    expect(after.names).toContain('web_search')
-    expect(after.text).not.toContain('<released_tools description=')
-  })
-
-  it('resets the clock when the session activates the entry again', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { passiveRelease: idlePolicy } })
-    const { agent } = await makeAgent('idle-again')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-again-activate')
-    nextTurn(agent.session, 1)
-    nextTurn(agent.session, 2)
-    // Asking for the same entry again is a use of it, even though nothing changed.
-    await callInTurn(ctx, agent, 3, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell again' }, 'idle-again-reactivate')
-    nextTurn(agent.session, 3)
-
-    const after = await presentation(ctx, agent)
-    expect(after.names).toContain(DISCOVERABLE_TOOL)
-    expect(after.text).not.toContain('<released_tools description=')
-  })
-
-  it('does not reset the clock when an activation is refused', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { passiveRelease: idlePolicy } })
-    let activations = 0
-    cleanups.push(ctx.tools.guard((exec) => {
-      if (exec.name !== 'activate_tools')
-        return undefined
-      activations += 1
-      return activations === 2 ? 'The core guard denies the second activation' : undefined
-    }))
-    const { agent } = await makeAgent('idle-refused-activation')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-refused-activate')
-    nextTurn(agent.session, 1)
-    // The second activation never commits, so the session never got the entry
-    // again: it is not a use of it and its clock keeps standing where it was.
-    const refused = await callInTurn(ctx, agent, 2, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell again' }, 'idle-refused-reactivate')
-    expect(refused.isError).toBe(true)
-    nextTurn(agent.session, 2)
-    nextTurn(agent.session, 3)
-
-    const after = await presentation(ctx, agent)
-    // The entry sat idle since the turn it was activated on, so it is reclaimed.
-    expect(after.names).not.toContain(DISCOVERABLE_TOOL)
-    expect(after.text).toContain(`kind="idle" reason="idle 3 turns"`)
-  })
-
-  it('takes the reclaimed tool out of the admission of the step that follows', async () => {
-    const { ctx, makeAgent } = await fixture({ withoutDeclarations: true, policy: { passiveRelease: idlePolicy } })
-    const { agent } = await makeAgent('idle-admission')
-    await ctx.systemPrompt.assemble({ scope: agent, agent })
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-admission-activate')
-    expect([...(await resolveStep(ctx, agent)).keys()]).toContain(DISCOVERABLE_TOOL)
-
-    nextTurn(agent.session, 1)
-    nextTurn(agent.session, 2)
-    nextTurn(agent.session, 3)
-
-    // The policy is decided before the host resolves the step's tool set, so the
-    // entry is gone from the very admission that follows the decision.
-    expect([...(await resolveStep(ctx, agent)).keys()]).not.toContain(DISCOVERABLE_TOOL)
-  })
-
-  it('reclaims the stale activations of a restored session on its first step', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { passiveRelease: idlePolicy } })
-    const original = await makeAgent('idle-source')
-    await callInTurn(ctx, original.agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-source-activate')
-    nextTurn(original.agent.session, 1)
-    nextTurn(original.agent.session, 2)
-    nextTurn(original.agent.session, 3)
-    const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
-
-    const restored = await makeAgent('idle-restored', serialized)
-    const after = await presentation(ctx, restored.agent)
-    expect(after.names).not.toContain(DISCOVERABLE_TOOL)
-    // The turn comes from the log, so the restored session counts the same idle
-    // turns the session it continues did.
-    expect(after.text).toContain('kind="idle" reason="idle 3 turns"')
-  })
-
-  it('replays the same log to the same release', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { passiveRelease: idlePolicy } })
-    const original = await makeAgent('idle-replay-source')
-    await callInTurn(ctx, original.agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-replay-activate')
-    nextTurn(original.agent.session, 1)
-    nextTurn(original.agent.session, 2)
-    nextTurn(original.agent.session, 3)
-    const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
-
-    const first = await makeAgent('idle-replay-first', serialized)
-    const second = await makeAgent('idle-replay-second', serialized)
-    const firstText = (await presentation(ctx, first.agent)).text
-    const secondText = (await presentation(ctx, second.agent)).text
-    expect(firstText).toContain('kind="idle"')
-    expect(secondText).toBe(firstText)
-  })
-
-  it('writes one info line per reclaimed entry into the log', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { passiveRelease: idlePolicy } })
-    const { agent } = await makeAgent('idle-log')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-log-activate')
-    nextTurn(agent.session, 1)
-    nextTurn(agent.session, 2)
-    nextTurn(agent.session, 3)
-    await presentation(ctx, agent)
-
-    const lines = ctx.logger.buffer.filter(message => message.type === 'info' && message.args.some((arg: unknown) => String(arg).includes(agent.session.id)))
-    expect(lines).toHaveLength(1)
-    expect(lines[0]?.args.join(' ')).toContain(DISCOVERABLE_TOOL)
-    expect(lines[0]?.args.join(' ')).toContain('idle 3 turns')
-  })
-
-  it('reclaims nothing while the passive policy is off', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { passiveRelease: { ...idlePolicy, enabled: false } } })
-    const { agent } = await makeAgent('idle-disabled')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-disabled-activate')
-    nextTurn(agent.session, 1)
-    nextTurn(agent.session, 2)
-    nextTurn(agent.session, 3)
-
-    const after = await presentation(ctx, agent)
-    expect(after.names).toContain(DISCOVERABLE_TOOL)
-    expect(after.text).not.toContain('<released_tools description=')
-  })
-
-  it('reads the idle window from the configuration of the moment', async () => {
-    const { ctx, makeAgent, setPolicy } = await fixture({ policy: { passiveRelease: idlePolicy } })
-    const { agent } = await makeAgent('idle-config')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'idle-config-activate')
-    nextTurn(agent.session, 1)
-    nextTurn(agent.session, 2)
-
-    // A shorter window reclaims the entry on the next step.
-    setPolicy({ passiveRelease: { enabled: true, idleTurns: 1, maxActivatedTools: 24 } })
-    const after = await presentation(ctx, agent)
-    expect(after.names).not.toContain(DISCOVERABLE_TOOL)
-    expect(after.text).toContain('kind="idle" reason="idle 2 turns"')
-  })
-})
-
-/**
- * The cap is the other half of the passive policy: a session that activated more
- * tools than the configuration allows loses the ones it did not use, and the model
- * is told which entries went away and why.
- */
-describe('the passive activation cap', () => {
-  const capPolicy = { enabled: true, idleTurns: 6, maxActivatedTools: 1 }
-  const capGroup = { identifier: 'files', name: 'Files', description: 'File utilities', tools: ['read', DISCOVERABLE_TOOL], sections: [] }
-
-  it('keeps the entries the session activated this turn', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { basicTools: [], passiveRelease: capPolicy } })
-    const { agent } = await makeAgent('cap-current-turn')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'cap-current-turn-pwsh')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: ['web_search'], reason: 'Search the web' }, 'cap-current-turn-web')
-
-    const after = await presentation(ctx, agent)
-    // One activation may outgrow the cap for a round: the entries the session
-    // holds right now are not squeezed out under it.
-    expect(after.names).toContain(DISCOVERABLE_TOOL)
-    expect(after.names).toContain('web_search')
-    expect(after.text).not.toContain('<released_tools description=')
-  })
-
-  it('squeezes out the least recently used entry in the next round', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { basicTools: [], passiveRelease: capPolicy } })
-    const { agent } = await makeAgent('cap-reclaim')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'cap-reclaim-pwsh')
-    nextTurn(agent.session, 1)
-    await callInTurn(ctx, agent, 2, 'activate_tools', { identifiers: ['web_search'], reason: 'Search the web' }, 'cap-reclaim-web')
-
-    const after = await presentation(ctx, agent)
-    expect(after.names).not.toContain(DISCOVERABLE_TOOL)
-    expect(after.names).toContain('web_search')
-    expect(after.text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" names="${DISCOVERABLE_TOOL}" kind="cap" reason="cap exceeded"/>`)
-  })
-
-  it('holds the excess through a later step of the same turn', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { basicTools: [], passiveRelease: capPolicy } })
-    const { agent } = await makeAgent('cap-same-turn')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'cap-same-turn-pwsh')
-    // The turn's first step closed and the next step opened: the excess the
-    // second activation creates persists through this turn's assemblies, and
-    // only the next turn's first assembly trims it.
-    agent.session.append('step/end', { turn: 1, step: 1 })
-    agent.session.append('step/start', { turn: 1, step: 2 })
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: ['web_search'], reason: 'Search the web' }, 'cap-same-turn-web')
-
-    const after = await presentation(ctx, agent)
-    expect(after.names).toContain(DISCOVERABLE_TOOL)
-    expect(after.names).toContain('web_search')
-    expect(after.text).not.toContain('<released_tools description=')
-  })
-
-  it('never refuses an activation because of the cap', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { basicTools: [], passiveRelease: capPolicy } })
-    const { agent } = await makeAgent('cap-activation')
-    const result = await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL, 'web_search'], reason: 'Both at once' }, 'cap-activation-both')
-
-    expect(result.isError).toBe(false)
-    const after = await presentation(ctx, agent)
-    expect(after.names).toContain(DISCOVERABLE_TOOL)
-    expect(after.names).toContain('web_search')
-  })
-
-  it('does not count the basic tools against the cap', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { groups: [capGroup], passiveRelease: capPolicy } })
-    const { agent } = await makeAgent('cap-basic')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: ['files'], reason: 'Use the file utilities' }, 'cap-basic-activate')
-
-    const after = await presentation(ctx, agent)
-    // The group carries a basic tool, and a basic tool never counts: the
-    // session holds one counted tool and the cap is one.
-    expect(after.names).toContain(DISCOVERABLE_TOOL)
-    expect(after.text).not.toContain('<released_tools description=')
-  })
-
-  it('writes one info line per squeezed entry into the log', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { basicTools: [], passiveRelease: capPolicy } })
-    const { agent } = await makeAgent('cap-log')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'cap-log-pwsh')
-    nextTurn(agent.session, 1)
-    await callInTurn(ctx, agent, 2, 'activate_tools', { identifiers: ['web_search'], reason: 'Search the web' }, 'cap-log-web')
-    await presentation(ctx, agent)
-
-    const lines = ctx.logger.buffer.filter(message => message.type === 'info' && message.args.some((arg: unknown) => String(arg).includes(agent.session.id)))
-    expect(lines).toHaveLength(1)
-    expect(lines[0]?.args.join(' ')).toContain(DISCOVERABLE_TOOL)
-    expect(lines[0]?.args.join(' ')).toContain('cap exceeded')
-  })
-
-  it('merges the idle and the cap releases into one published section', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { basicTools: [], passiveRelease: { enabled: true, idleTurns: 1, maxActivatedTools: 1 } } })
-    const { agent } = await makeAgent('cap-merged')
-    await callInTurn(ctx, agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'cap-merged-pwsh')
-    nextTurn(agent.session, 1)
-    await callInTurn(ctx, agent, 2, 'activate_tools', { identifiers: ['web_search'], reason: 'Search the web' }, 'cap-merged-web')
-    nextTurn(agent.session, 2)
-    await callInTurn(ctx, agent, 3, 'activate_tools', { identifiers: ['grep'], reason: 'Grep the tree' }, 'cap-merged-grep')
-
-    const after = await presentation(ctx, agent)
-    // One section, one publication, one record per reason.
-    expect(after.text.match(/<released_tools description=/g)).toHaveLength(1)
-    expect(after.text).toContain(`<tool identifier="${DISCOVERABLE_TOOL}" names="${DISCOVERABLE_TOOL}" kind="idle" reason="idle 2 turns"/>`)
-    expect(after.text).toContain('<tool identifier="web_search" names="web_search" kind="cap" reason="cap exceeded"/>')
-    const published = catalogMessages(agent)
-    expect(published).toHaveLength(1)
-    expect(published[0]?.source).toMatchObject({
-      released: [
-        { identifier: DISCOVERABLE_TOOL, names: [DISCOVERABLE_TOOL], reason: { kind: 'idle', text: 'idle 2 turns' } },
-        { identifier: 'web_search', names: ['web_search'], reason: { kind: 'cap', text: 'cap exceeded' } },
-      ],
-    })
-  })
-
-  it('replays the same log to the same release', async () => {
-    const { ctx, makeAgent } = await fixture({ policy: { basicTools: [], passiveRelease: capPolicy } })
-    const original = await makeAgent('cap-replay-source')
-    await callInTurn(ctx, original.agent, 1, 'activate_tools', { identifiers: [DISCOVERABLE_TOOL], reason: 'Run the shell' }, 'cap-replay-pwsh')
-    nextTurn(original.agent.session, 1)
-    await callInTurn(ctx, original.agent, 2, 'activate_tools', { identifiers: ['web_search'], reason: 'Search the web' }, 'cap-replay-web')
-    nextTurn(original.agent.session, 2)
-    const serialized: SessionEvent[] = JSON.parse(JSON.stringify(original.events))
-
-    const first = await makeAgent('cap-replay-first', serialized)
-    const second = await makeAgent('cap-replay-second', serialized)
-    const firstText = (await presentation(ctx, first.agent)).text
-    const secondText = (await presentation(ctx, second.agent)).text
-    expect(firstText).toContain('kind="cap"')
-    expect(secondText).toBe(firstText)
   })
 })

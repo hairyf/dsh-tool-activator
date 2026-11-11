@@ -2,15 +2,12 @@ import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { ToolPolicy } from './shared'
 import type { ToolCatalogItem } from './types'
 import { validatePolicy } from './config'
-import { ALWAYS_PRESENT_TOOL_NAMES, FIRST_PARTY_SECTION_TOOLS } from './constants'
+import { ACTIVATOR_TOOL_NAME, FIRST_PARTY_SECTION_TOOLS } from './constants'
 
 export function buildToolCatalog(schemas: readonly ToolSchema[], policy: ToolPolicy): ToolCatalogItem[] {
   validatePolicy(policy)
-  // The plugin's own tools are always in the model's face, so they are no part
-  // of the directory the model activates from.
-  const ownTools = new Set(ALWAYS_PRESENT_TOOL_NAMES)
   const available = new Map(schemas
-    .filter(tool => !ownTools.has(tool.name))
+    .filter(tool => tool.name !== ACTIVATOR_TOOL_NAME && tool.name !== 'run_code')
     .map(tool => [tool.name, tool]))
   const claimed = new Set<string>()
   const entries: ToolCatalogItem[] = []
@@ -65,27 +62,14 @@ export function buildToolCatalog(schemas: readonly ToolSchema[], policy: ToolPol
   return entries.sort((a, b) => a.identifier < b.identifier ? -1 : a.identifier > b.identifier ? 1 : 0)
 }
 
-export function enabledToolNames(catalog: readonly ToolCatalogItem[], policy: ToolPolicy, activatedIds: readonly string[], activatedToolNames: readonly string[] = []): Set<string> {
-  const enabled = new Set<string>(ALWAYS_PRESENT_TOOL_NAMES)
+export function enabledToolNames(catalog: readonly ToolCatalogItem[], policy: ToolPolicy, activatedIds: readonly string[]): Set<string> {
+  const enabled = new Set<string>([ACTIVATOR_TOOL_NAME, 'run_code'])
   const active = new Set(activatedIds)
-  const activeNames = new Set(activatedToolNames)
-  // The allow set is a policy/history function, not a registry snapshot: the
-  // admission gate only subtracts names from what actually resolves, so seeding
-  // a not-yet-registered name is inert and a tool that registers after the gate
-  // (a per-agent bash, a plugin's own tools) passes on the first turn. The
-  // seeded names also outlive their group: a renamed, split or deleted group
-  // must not take the tools a session already activated away.
-  for (const name of policy.basicTools)
-    enabled.add(name)
-  for (const name of activeNames)
-    enabled.add(name)
   for (const entry of catalog) {
-    // An activated group contributes its current members; a renamed or split
-    // group is a different identifier and must not ride in on the old one.
-    if (!active.has(entry.identifier))
-      continue
-    for (const tool of entry.tools)
-      enabled.add(tool.name)
+    for (const tool of entry.tools) {
+      if (policy.basicTools.includes(tool.name) || active.has(entry.identifier))
+        enabled.add(tool.name)
+    }
   }
   return enabled
 }

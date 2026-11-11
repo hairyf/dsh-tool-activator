@@ -24,16 +24,6 @@ describe('owned style tag lifecycle', () => {
     expect(ownedStyleTag()).toBeNull()
   })
 
-  it('dims a disabled input, so a locked field reads as locked', () => {
-    const dispose = mountToolActivatorStyles()
-
-    // The Host's own input primitive keeps its own class names, so the plugin
-    // dims it through the class it puts on the field.
-    expect(ownedStyleTag()?.textContent).toContain('.dsh-tool-activator-input:disabled')
-    expect(ownedStyleTag()?.textContent).toContain(`.${CLASSES.countInput}:disabled`)
-    dispose()
-  })
-
   it('never takes ownership of an existing tag with the same plugin id', () => {
     const first = mountToolActivatorStyles()
     const original = ownedStyleTag()

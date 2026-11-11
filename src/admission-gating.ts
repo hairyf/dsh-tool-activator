@@ -26,13 +26,11 @@ export interface AdmissionGate {
   /** The tools this agent may call in its next step. */
   setAllowed: (agent: Agent, allowed: ReadonlySet<string>) => void
   /**
-   * Resolve the allow-list for an agent, before every resolution.
+   * Resolve the allow-list for an agent that has none yet.
    *
    * A step resolves its tool set before it assembles, so the allow-list has to
    * exist before the first resolution — not after an assembly that would
-   * install it. Every later resolution needs it again: the session's tool set
-   * changes between steps, and a policy that reclaims an activation has to
-   * narrow the admission of the very step that follows it.
+   * install it.
    */
   setResolver: (resolve: (agent: Agent) => void) => void
   /** Forget one agent. */
@@ -117,7 +115,7 @@ export function installAdmissionGating(tools: unknown): AdmissionGate | undefine
     writable: true,
     async value(this: unknown, context: ToolActivationContextLike): Promise<ResolvedToolSetLike> {
       const agent = context.agent
-      if (agent !== undefined && resolver !== undefined)
+      if (agent !== undefined && !allowed.has(agent) && resolver !== undefined)
         resolver(agent)
       const toolSet = await original.call(this, context)
       const allow = agent === undefined ? undefined : allowed.get(agent)
