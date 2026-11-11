@@ -19,10 +19,12 @@ interface FakeContext {
  */
 class FakeTools {
   extra: string[] = []
+  /** Definitions the admission hands back; the default is the bare presentation. */
+  definitions?: Map<string, unknown>
 
   async resolve(context: FakeContext): Promise<FakeToolSet> {
     const names = ['read', 'bash', 'ast_grep', 'write', ...this.extra]
-    const visible = new Map(names.map(name => [name, { name }]))
+    const visible = this.definitions ?? new Map(names.map(name => [name, { name }]))
     return {
       dispose: () => { },
       view: (scope?: unknown) => scope === context.agent ? visible : new Map(),
@@ -40,6 +42,76 @@ function agent(id: string): Agent {
 }
 
 describe('installAdmissionGating', () => {
+  it('keeps every definition in the admission and defers the ones that are not always shown', async () => {
+    const tools = new FakeTools()
+    const gate = installAdmissionGating(tools)!
+    const owner = agent('deferred')
+    gate.setMode(owner, 'defer')
+    gate.setImmediate(owner, new Set(['read']))
+    gate.setAllowed(owner, new Set(['read']))
+
+    const toolSet = await tools.resolve({ agent: owner })
+    const admitted = toolSet.view(owner) as ReadonlyMap<string, { name: string, deferLoading?: true }>
+
+    // The declaration list the host merges is derived from exactly this view.
+    expect([...admitted.keys()]).toEqual(['read', 'bash', 'ast_grep', 'write'])
+    expect(admitted.get('read')!.deferLoading).toBeUndefined()
+    expect(admitted.get('bash')!.deferLoading).toBe(true)
+    expect(admitted.get('write')!.deferLoading).toBe(true)
+  })
+
+  it('produces a byte-identical declaration list across an activation', async () => {
+    const tools = new FakeTools()
+    const gate = installAdmissionGating(tools)!
+    const owner = agent('stable-head')
+    gate.setMode(owner, 'defer')
+    gate.setImmediate(owner, new Set(['read']))
+
+    // `headerEquals` compares each declaration with JSON.stringify, so the whole
+    // rendered list has to match, not just the names.
+    const render = (view: ReadonlyMap<string, unknown>): string => JSON.stringify([...view.entries()])
+
+    gate.setAllowed(owner, new Set(['read']))
+    const before = render((await tools.resolve({ agent: owner })).view(owner))
+
+    gate.setAllowed(owner, new Set(['read', 'write', 'bash']))
+    const after = render((await tools.resolve({ agent: owner })).view(owner))
+
+    expect(after).toBe(before)
+  })
+
+  it('stops deferring only when the configuration stops deferring', async () => {
+    const tools = new FakeTools()
+    const gate = installAdmissionGating(tools)!
+    const owner = agent('config-flip')
+    gate.setMode(owner, 'defer')
+    gate.setImmediate(owner, new Set(['read', 'bash']))
+    gate.setAllowed(owner, new Set(['read', 'bash']))
+
+    const view = (await tools.resolve({ agent: owner })).view(owner) as ReadonlyMap<string, { deferLoading?: true }>
+    expect(view.get('bash')!.deferLoading).toBeUndefined()
+    expect(view.get('write')!.deferLoading).toBe(true)
+  })
+
+  it('leaves the deferred definition executable', async () => {
+    const run = vi.fn(() => 'ran')
+    const tools = new FakeTools()
+    const execute = [...(await new FakeTools().resolve({ agent: agent('x') })).view(agent('x')).values()][0] as object
+    tools.definitions = new Map(['read', 'bash'].map(name => [name, { ...execute, name, execute: run }]))
+    const gate = installAdmissionGating(tools)!
+    const owner = agent('exec-identity')
+    gate.setMode(owner, 'defer')
+    gate.setAllowed(owner, new Set(['read']))
+
+    const toolSet = await tools.resolve({ agent: owner })
+    const deferred = (toolSet.view(owner) as ReadonlyMap<string, { name: string, deferLoading?: true, execute: () => string }>).get('bash')!
+
+    // The gate rewrites the presentation, not the execution: the spread keeps the
+    // original callbacks, so the tool still runs once its activation commits.
+    expect(deferred.deferLoading).toBe(true)
+    expect(deferred.execute()).toBe('ran')
+  })
+
   it('narrows the step admission to the enabled tools', async () => {
     const tools = new FakeTools()
     const gate = installAdmissionGating(tools)!
