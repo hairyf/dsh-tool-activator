@@ -1,22 +1,25 @@
 # 源码验证记录
 
-## 2026-11-12：回退 #8 / #10，只保留 dsh 0.2.2 的 admission 适配
+## 2026-11-12（二）：在 dsh 0.2.2 上恢复保头稳定
 
-问题：`2026-10-19` 那条「激活不再破坏前缀缓存」的结论在 dsh `0.2.2` 上不再成立，而 #8 / #10 仍按它对外承诺，把一个失效的前提写进了文档和测试。
+问题：上一轮把「激活会换头」当成 0.2.2 的必然结果并据此回退，这个结论是错的。换头不是宿主契约的必然，而是**隐藏方式**选错了。
 
-- 宿主取证（`0.2.2-rc.1` 打包产物）：`dsh-system-prompt` 的 `assemble()` 在瀑布之后 `return { ...transformed, tools }`，用自己算出的声明覆盖瀑布返回值；该声明来自 `ctx.systemPrompt.tools(({ scope, toolSet }) => executor.describe(this.definitions(scope, toolSet)))`，也就是当步 admission 的视图；`dsh-agent-loop` 的 `buildRequest()` 在 `headerEquals` 不成立时写一条 `reason: "change"` 的 `request/header`。三者合起来：插件要隐藏工具只能窄化 `tools.resolve()`，一窄化声明就变，声明一变就换头。
-- 实测（本机 `~/.dsh/sessions` 真实会话，逐帧解压 `session.v4.jsonl.zstd` 统计）：`session-dedb09cb` 从 `initial` n=9 变到 `change` n=16，激活后的那一步 `cacheRead=0`/`input=14508`；`session-6838c017` 两次激活对应两次 `change`，其中 `input=175675`、`cacheRead=0`。多个会话的 header change 次数与 `activate_tools` 调用次数基本一致。
-- 结论：#8 的「全量声明 + `defer_loading` + 只追加 `tool_addition`」在 0.2.2 上是死路径（`assembly.tools` 恒为 `undefined`，`announce()` 的候选条件永远为空），#10 又在其上加了默认开启的被动释放，把「每次激活换一次头」变成「每个空闲周期换一次头」。二者不可在插件侧修复，故回退。
-- 回退：`git revert -m 1` 依次回退合并提交 `d70e689`（#10）与 `442ce2c`（#8），工作树与 `v0.4.3` 逐字节一致（仅 `package.json` 版本号不同）。
-- 保留的 0.2.2 适配（最小集）：`src/admission-gating.ts` 与测试（从 `ba3ffb3` 取回）、`AssembledPrompt` 类型（`tools` 可选）、`filterPromptAssembly` 在无声明时不写回 `tools`、宿主侧 `ownsDeclarations` 探测与 `applyHiding`/`gateResolver` 接线、两条 warn-once 诊断。
+- 机制更正：宿主用 `toolSet.view()` 派生声明，而 `projectToolSchema` 会把定义上的 `deferLoading` 原样带进声明（`{ name, description, parameters, ...deferLoading === true ? { deferLoading } : {} }`）。也就是说插件不必把工具从 admission 里**删掉**才能让模型看不见——**保留定义、打上 `deferLoading`** 同样让模型拿不到它的 schema，而声明集合保持不变。
+- 修复：`src/admission-gating.ts` 增加 `AdmissionMode`。路由支持对话中途变更工具（`toolUpdate`）时用 `defer` 模式：未激活工具留在 admission 里、只加 `deferLoading`，声明集合恒定，`headerEquals` 恒为真，宿主不再写 `request/header`。不支持的路由继续用 `filter` 模式。
+- 激活如何生效：保留声明后，模型需要的是「该工具可用」这一步。公告改在 `step/start` 之后写：此时步已开启、请求尚未构建，消息落进同一步的 `deriveMessages()`，且排在上一轮的 tool result 之后（放在激活提交处会把 developer 消息排到自己的 tool result 之前，破坏 adapter 的 system-update 刷新顺序）。原实现把公告放在装配钩子里，而真实宿主在 `preStep` 装配时上一轮 `step/end` 已写入，`stepOpen` 恒为 false —— 这是它在 0.2.2 上一直没生效的原因。
+- 时序：能力探测（`llm.resolveModelInfo`）在 admission 的 resolver 里 `await`，因此第一步就已是 `defer` 模式；若晚一步决定，第一步 filter、第二步 defer，头仍会变一次。
+- 授权边界：工具虽留在 admission 里，`ctx.tools.guard()` 在激活提交前拒绝执行，保持「可见性 ≠ 权限」。
+- 用例：新增 3 条 gate 用例（保留全集并只改 defer 标记、激活前后集合恒等、延迟定义仍保留执行回调）；全量 13 个文件 327 用例通过，lint、typecheck 均退出 `0`。
+- 未验证：真实端点 A/B 与真实 profile 的 `cacheRead` 对照；本轮只验证到声明集合恒等这一层。
+
+## 2026-11-12（一）：回退 #8 / #10
+
+- `git revert -m 1` 依次回退合并提交 `d70e689`（#10）与 `442ce2c`（#8），工作树与 `v0.4.3` 逐字节一致（仅 `package.json` 版本号不同）。
 - 删除：`group_tools`、`deactivate_tools`、被动释放（空闲回收 / 激活上限）、分组编辑器改版与写队列、目录重发（`<removed_tools>` / `<released_tools>`）、`src/injection.ts`、`src/release.ts`、`src/cap.ts`、`src/idle.ts`、`src/groups.ts`、`src/group-writer.ts` 及客户端对应文件。
-- 文档：README 的「激活不重写请求头」改为「激活与请求头缓存」，如实说明每次激活会换头及其原因。
-- 用例：13 个文件、321 个用例通过；lint、typecheck、build 均退出 `0`。
-- 未验证：真实 GUI E2E、打包产物安装到真实 profile。
+- 保留的 0.2.2 适配：`src/admission-gating.ts` 与测试、`AssembledPrompt` 类型（`tools` 可选）、`filterPromptAssembly` 在无声明时不写回 `tools`、`ownsDeclarations` 探测与 `gateResolver` 接线。
+- 当时的错误结论「0.2.2 上无法保头稳定」已被本条上一节修正。
 
-## 2026-10-19：激活不再破坏前缀缓存（已被 2026-11-12 取代）
-
-> **该结论只对 dsh `0.2.0`–`0.2.1` 成立。** `0.2.2` 起宿主接管工具声明，保头稳定路径失效，见上一条记录。
+## 2026-10-19：激活不再破坏前缀缓存
 
 问题：旧实现按激活状态过滤 `assembly.tools`，每次激活都重写请求头里的工具声明列表，提供方缓存前缀随之失效。
 

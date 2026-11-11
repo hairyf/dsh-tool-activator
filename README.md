@@ -63,17 +63,11 @@
 }
 ```
 
-### 激活与请求头缓存
+### 激活不重写请求头
 
-**每次激活都会换一次请求头，提供方的上下文前缀缓存会在那一步失效。**
+路由声明支持对话中途变更工具时（`deepseek-flash` 等，见模型目录的 `toolUpdate`），插件把**全部**工具一次性声明出去：基础工具正常声明，其余标 `defer_loading`（不占上下文 token）。激活因此不改动声明列表，只在会话尾部追加一条 `tool_addition`，提供方此前缓存的前缀保持有效。
 
-这不是实现选择，而是 dsh $ge$ `0.2.2` 的宿主契约决定的：工具声明由宿主在 `system-prompt/assemble` 之后自己合并，插件在瀑布里写回 `tools` 会被无条件覆盖；宿主算声明用的又是当步的 admission（`tools.resolve()`）视图。插件隐藏未激活工具的唯一手段就是窄化 admission，而 admission 一变，声明表就变，宿主随即写一条 `reason: "change"` 的 `request/header`。
-
-因此：`0.2.0`–`0.2.1` 上那套「全量声明 + `defer_loading` + 只追加 `tool_addition`」的保头稳定路径，在 `0.2.2` 上无法生效。
-
-- 代价是每次激活一次前缀重算；未激活的普通轮次不受影响，缓存正常累积。
-- 想减少换头次数，就把常用的工具直接设成**默认激活**，让会话一开始就把它们声明好。
-- 工具目录本身作为插件自己的消息追加在历史尾部，不参与请求头，重发不额外破坏缓存。
+不支持该能力的路由退回"按激活状态过滤声明列表"，功能不变，但每次新激活会重算一次请求头。
 
 ---
 
@@ -106,8 +100,8 @@
 
 ---
 
-* **测试情况**：2026-11-12 回退后，13 个文件、321 个用例全部通过；lint、类型检查与 Build 同样通过。
-* **未验证项**：真实 GUI E2E 与真实 profile 验证（本次发布未在真实 profile 中安装验证）。
+* **测试情况**：2026-10-11 完全权限修复后，12 个文件、304 个用例全部通过；lint、类型检查与 Build 同样通过。
+* **未验证项**：真实 GUI E2E、打包发布及真实 profile 验证。
 
 ---
 
@@ -127,8 +121,8 @@ MIT
 [bundle-href]: https://bundlephobia.com/result?p=dsh-tool-activator
 [jsdocs-src]: https://img.shields.io/badge/jsdocs-reference-080f12?style=flat&colorA=080f12&colorB=1fa669
 [jsdocs-href]: https://www.jsdocs.io/package/dsh-tool-activator
-[license-src]: https://img.shields.io/github/license/Tranquillitatis-Lab/dsh-tool-activator.svg?style=flat&colorA=080f12&colorB=1fa669
-[license-href]: https://github.com/Tranquillitatis-Lab/dsh-tool-activator/blob/main/LICENSE.md
+[license-src]: https://img.shields.io/github/license/hairyf/dsh-tool-activator.svg?style=flat&colorA=080f12&colorB=1fa669
+[license-href]: https://github.com/hairyf/dsh-tool-activator/blob/main/LICENSE.md
 
 ## 友情链接
 

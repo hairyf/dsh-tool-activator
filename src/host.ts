@@ -61,23 +61,10 @@ interface AnnouncementState {
 }
 
 /**
- * Hosts from dsh 0.2.2 on hand the assembly waterfall a presentation and merge the
- * provider-owned tool schemas afterwards, so this plugin can no longer hide tool
- * declarations there. Say so once rather than on every agent.
- */
-let reportedDeclarationsUnavailable = false
-/**
  * A host that owns the declarations and exposes no step admission leaves the plugin
- * nowhere to hide an un-activated tool: the model would see all of them.
+ * nowhere to present an un-activated tool: the model would see all of them.
  */
 let reportedMissingAdmission = false
-
-function reportDeclarationsUnavailable(): void {
-  if (reportedDeclarationsUnavailable)
-    return
-  reportedDeclarationsUnavailable = true
-  console.warn('[dsh-tool-activator] prompt assembly no longer carries tool declarations (dsh >= 0.2.2); inactive tools are hidden by narrowing the step admission instead of by filtering the assembly')
-}
 
 function reportMissingAdmission(): void {
   if (reportedMissingAdmission)
@@ -131,13 +118,33 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
   // the union, an assembly that runs before that fold would re-hide the tool the
   // commit just declared — visible as "I activated it and it disappeared".
   const enabledSeen = new WeakMap<Agent, Set<string>>()
+  /**
+   * The tools this plugin presents for one agent: every catalog name it manages,
+   * and the subset the session may call. The guard reads both, so a tool the gate
+   * only deferred is still refused at execution until its activation commits.
+   */
+  const gateState = new WeakMap<Agent, { managed: ReadonlySet<string>, enabled: ReadonlySet<string> }>()
+  /**
+   * Whether this agent's route can load a deferred declaration mid-conversation.
+   * `undefined` until the model catalogue answers; the first step then falls back
+   * to the filtered presentation, which is the only shape that hides anything on
+   * a route that cannot carry an update.
+   */
+  const routeUpdates = new WeakMap<Agent, boolean>()
+  /**
+   * The agent each assembled session belongs to. `step/start` is the one moment a
+   * deferred activation can be announced: the step is open, the request has not
+   * been built yet, and the message lands after the previous step's tool result
+   * instead of in the middle of the committing step's own result stream.
+   */
+  const sessionAgents = new WeakMap<Session, Agent>()
 
   /**
-   * Install the hiding gate for one agent, never narrowing what it already saw. The
-   * merged set is returned: the prompt has to present exactly what the gate lets
-   * the model call, or a tool the gate keeps would be offered as inactive.
+   * Present the enabled tools for one agent, never re-hiding what it already saw.
+   * The merged set is returned: the prompt has to present exactly what the gate
+   * lets the model call, or a tool the gate keeps would be offered as inactive.
    */
-  function applyHiding(agent: Agent, catalog: ToolCatalogItem[], enabled: ReadonlySet<string>): Set<string> {
+  function applyHiding(agent: Agent, catalog: ToolCatalogItem[], enabled: ReadonlySet<string>, policy: ToolPolicy): Set<string> {
     const previous = enabledSeen.get(agent)
     const merged = new Set(enabled)
     if (previous !== undefined) {
@@ -145,8 +152,31 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
         merged.add(name)
     }
     enabledSeen.set(agent, merged)
+    gateState.set(agent, { managed: new Set(catalog.flatMap(entry => entry.tools.map(tool => tool.name))), enabled: merged })
+    // What stays declared without deferral is the configuration's decision, not
+    // this session's: the head must not move when an activation commits.
+    hiding.setImmediate(agent, immediateToolNames(policy))
     hiding.sync(agent, catalog, merged)
     return merged
+  }
+
+  /**
+   * Whether this route reads tool declarations that change mid-conversation.
+   *
+   * On such a route every tool can stay declared, so the request head never
+   * changes and the provider keeps its cached prefix; an activation then only
+   * appends a `tool_addition`. A route without the capability must fall back to
+   * the filtered presentation, which is the only shape that withholds a schema
+   * there.
+   */
+  async function routeSupportsUpdates(agent: Agent): Promise<boolean> {
+    const known = routeUpdates.get(agent)
+    if (known !== undefined)
+      return known
+    const supported = await supportsToolAdditions(agent)
+    routeUpdates.set(agent, supported)
+    hiding.setMode(agent, supported && hiding.installed ? 'defer' : 'filter')
+    return supported
   }
 
   // Latched from the first assembly: hosts that own tool declarations hand the
@@ -170,13 +200,29 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
   // the one-step-late "tools added, then removed" flicker. Resolving the
   // allow-list inside the admission instead makes the first resolution correct no
   // matter who created the agent or when this plugin loaded.
-  hiding.setGateResolver((agent) => {
+  hiding.setGateResolver(async (agent) => {
     if (declarationsOwned === true)
       return
     const policy = policySnapshot()
     const catalog = catalogOf(agent, policy)
-    applyHiding(agent, catalog, enabledToolNames(catalog, policy, activatedHistoryOf(agent).activatedToolIds))
+    // The route decides the presentation, and the admission awaits it: a step
+    // that resolved before the capability was known would declare a filtered head
+    // and then switch, which is exactly the one change this gate must not make.
+    await routeSupportsUpdates(agent)
+    applyHiding(agent, catalog, enabledToolNames(catalog, policy, activatedHistoryOf(agent).activatedToolIds), policy)
   })
+  // A deferred declaration is only offered to the model once its activation
+  // commits. Until then the tool is still in the admission — that is what keeps
+  // the head stable — so execution is where an inactive tool has to be refused.
+  ctx.effect(() => ctx.tools.guard((exec) => {
+    const agent = exec.agent
+    if (agent === undefined)
+      return undefined
+    const state = gateState.get(agent)
+    if (state === undefined || !state.managed.has(exec.name) || state.enabled.has(exec.name))
+      return undefined
+    return `Tool "${exec.name}" is installed but not activated in this session. Call ${ACTIVATOR_TOOL_NAME} with its identifier first, then call it again.`
+  }))
   let approval: Context['approval'] | undefined
   let skills: Context['skills'] | undefined
   ctx.inject(['approval'], (owner) => {
@@ -225,6 +271,7 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     if (!context.agent)
       return assembly
     const agent = requireAgent(context.agent)
+    sessionAgents.set(agent.session, agent)
     if (context.scope !== agent)
       throw new Error('dsh-tool-activator requires the exact agent scope for prompt assembly')
     context.signal?.throwIfAborted()
@@ -244,22 +291,22 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
       // still has something to call under that name.
       return assembly
     }
-    // On a host that owns the declarations the gate is what hides an inactive
-    // tool, so the prompt presents exactly what the gate admits; a host that
-    // still hands over the declarations filters them here instead.
-    const enabled = ownsDeclarations ? computed : applyHiding(agent, catalog, computed)
-    if (!ownsDeclarations) {
-      reportDeclarationsUnavailable()
-      if (!hiding.installed)
-        reportMissingAdmission()
-    }
+    // The route decides how an inactive tool leaves the model's face, and the
+    // decision has to be made before the gate presents this step: the head only
+    // stays stable when every declaration can be deferred instead of dropped.
+    const appending = await routeSupportsUpdates(agent)
+    // On a host that owns the declarations the gate is what presents an inactive
+    // tool, so the prompt reads exactly what the gate presents; a host that still
+    // hands over the declarations filters them here instead.
+    const enabled = ownsDeclarations ? computed : applyHiding(agent, catalog, computed, policy)
+    if (!ownsDeclarations && !hiding.installed)
+      reportMissingAdmission()
     const instructions = enabled.has('skill') && ctx.tools.get('skill', agent)
       ? history.activatedSkills.flatMap(skill => skill.instructions === undefined ? [] : [skill.instructions])
       : []
     const sdk = assembly.sections.some(section => section.name === 'tools:sdk' && section.text.length > 0)
       ? await renderSdk(agent, ctx.tools.schemas(agent).filter(schema => schema.name !== 'run_code' && enabled.has(schema.name)))
       : undefined
-    const appending = await supportsToolAdditions(agent)
     if (appending)
       announce(agent, enabled, policy)
     return filterPromptAssembly(assembly, catalog, policy, enabled, sdk, instructions, appending)
@@ -293,6 +340,16 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     const state = announcements.get(session.id)
     if (state)
       foldAnnouncement(state, event)
+    // A host that defers keeps every declaration in place, so the activation is
+    // announced here: the step just opened, its request has not been built, and a
+    // `tool_addition` is exactly what turns the deferred declaration into a
+    // callable tool. The head never changes, so the cached prefix survives.
+    if (event.type === 'step/start') {
+      const agent = sessionAgents.get(session)
+      const gate = agent === undefined ? undefined : gateState.get(agent)
+      if (agent !== undefined && gate !== undefined && routeUpdates.get(agent) === true)
+        announce(agent, gate.enabled, policySnapshot())
+    }
     if (event.type !== 'turn/end')
       return
     for (const [token, value] of executions) {
