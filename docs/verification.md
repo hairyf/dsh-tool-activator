@@ -1,6 +1,22 @@
 # 源码验证记录
 
-## 2026-10-19：激活不再破坏前缀缓存
+## 2026-11-12：回退 #8 / #10，只保留 dsh 0.2.2 的 admission 适配
+
+问题：`2026-10-19` 那条「激活不再破坏前缀缓存」的结论在 dsh `0.2.2` 上不再成立，而 #8 / #10 仍按它对外承诺，把一个失效的前提写进了文档和测试。
+
+- 宿主取证（`0.2.2-rc.1` 打包产物）：`dsh-system-prompt` 的 `assemble()` 在瀑布之后 `return { ...transformed, tools }`，用自己算出的声明覆盖瀑布返回值；该声明来自 `ctx.systemPrompt.tools(({ scope, toolSet }) => executor.describe(this.definitions(scope, toolSet)))`，也就是当步 admission 的视图；`dsh-agent-loop` 的 `buildRequest()` 在 `headerEquals` 不成立时写一条 `reason: "change"` 的 `request/header`。三者合起来：插件要隐藏工具只能窄化 `tools.resolve()`，一窄化声明就变，声明一变就换头。
+- 实测（本机 `~/.dsh/sessions` 真实会话，逐帧解压 `session.v4.jsonl.zstd` 统计）：`session-dedb09cb` 从 `initial` n=9 变到 `change` n=16，激活后的那一步 `cacheRead=0`/`input=14508`；`session-6838c017` 两次激活对应两次 `change`，其中 `input=175675`、`cacheRead=0`。多个会话的 header change 次数与 `activate_tools` 调用次数基本一致。
+- 结论：#8 的「全量声明 + `defer_loading` + 只追加 `tool_addition`」在 0.2.2 上是死路径（`assembly.tools` 恒为 `undefined`，`announce()` 的候选条件永远为空），#10 又在其上加了默认开启的被动释放，把「每次激活换一次头」变成「每个空闲周期换一次头」。二者不可在插件侧修复，故回退。
+- 回退：`git revert -m 1` 依次回退合并提交 `d70e689`（#10）与 `442ce2c`（#8），工作树与 `v0.4.3` 逐字节一致（仅 `package.json` 版本号不同）。
+- 保留的 0.2.2 适配（最小集）：`src/admission-gating.ts` 与测试（从 `ba3ffb3` 取回）、`AssembledPrompt` 类型（`tools` 可选）、`filterPromptAssembly` 在无声明时不写回 `tools`、宿主侧 `ownsDeclarations` 探测与 `applyHiding`/`gateResolver` 接线、两条 warn-once 诊断。
+- 删除：`group_tools`、`deactivate_tools`、被动释放（空闲回收 / 激活上限）、分组编辑器改版与写队列、目录重发（`<removed_tools>` / `<released_tools>`）、`src/injection.ts`、`src/release.ts`、`src/cap.ts`、`src/idle.ts`、`src/groups.ts`、`src/group-writer.ts` 及客户端对应文件。
+- 文档：README 的「激活不重写请求头」改为「激活与请求头缓存」，如实说明每次激活会换头及其原因。
+- 用例：13 个文件、321 个用例通过；lint、typecheck、build 均退出 `0`。
+- 未验证：真实 GUI E2E、打包产物安装到真实 profile。
+
+## 2026-10-19：激活不再破坏前缀缓存（已被 2026-11-12 取代）
+
+> **该结论只对 dsh `0.2.0`–`0.2.1` 成立。** `0.2.2` 起宿主接管工具声明，保头稳定路径失效，见上一条记录。
 
 问题：旧实现按激活状态过滤 `assembly.tools`，每次激活都重写请求头里的工具声明列表，提供方缓存前缀随之失效。
 

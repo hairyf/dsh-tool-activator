@@ -1,7 +1,7 @@
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { AssembledSection, PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type { ToolPolicy } from './shared'
-import type { ToolCatalogItem } from './types'
+import type { AssembledPrompt, ToolCatalogItem } from './types'
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { availableToolsForDiscovery, sectionToolDependencies } from './catalog'
 import { ACTIVATION_CONTEXT_NAME, ACTIVATOR_TOOL_NAME, RUN_CODE_TOOL_NAME } from './constants'
@@ -38,7 +38,7 @@ export function selectToolSections(sections: readonly AssembledSection[], catalo
   })
 }
 
-export function activationPrompt(assembly: PromptAssembly, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, skillInstructions: readonly string[] = []): string {
+export function activationPrompt(assembly: AssembledPrompt, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, skillInstructions: readonly string[] = []): string {
   const selectedSections = selectToolSections(assembly.sections, catalog, policy, enabledNames)
   const dependencies = sectionToolDependencies(catalog, policy)
   const docs = selectedSections.filter(section => Object.hasOwn(dependencies, section.name) || section.name === 'tools:sdk')
@@ -53,14 +53,16 @@ export function activationPrompt(assembly: PromptAssembly, catalog: readonly Too
       continue
     parts.push(`<activated_tool identifier="${escapeXml(entry.identifier)}">\n${visible.map(tool => `${escapeXml(tool.name)}: ${escapeXml(tool.description)}`).join('\n')}\n</activated_tool>`)
   }
-  const renderedDocs = renderPrompt({ ...assembly, sections: docs })
+  // `renderPrompt` is typed against the full assembly even though it only renders
+  // sections and variables; tool declarations play no part in this text.
+  const renderedDocs = renderPrompt({ ...assembly, tools: [...(assembly.tools ?? [])], sections: docs })
   if (renderedDocs)
     parts.push(renderedDocs)
   parts.push(...skillInstructions)
   return parts.join('\n\n')
 }
 
-export function filterPromptAssembly(assembly: PromptAssembly, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, sdk: string | undefined, skillInstructions: readonly string[] = [], deferDeclarations = false): PromptAssembly {
+export function filterPromptAssembly(assembly: AssembledPrompt, catalog: readonly ToolCatalogItem[], policy: ToolPolicy, enabledNames: ReadonlySet<string>, sdk: string | undefined, skillInstructions: readonly string[] = [], deferDeclarations = false): PromptAssembly {
   if (!assembly.contexts.some(context => context.name === ACTIVATION_CONTEXT_NAME))
     throw new Error('dsh-tool-activator requires runtime context; enable it or disable the plugin for this agent')
   const prepared = {
@@ -68,17 +70,27 @@ export function filterPromptAssembly(assembly: PromptAssembly, catalog: readonly
     sections: assembly.sections.map(section => section.name === 'tools:sdk' && sdk !== undefined ? { ...section, text: sdk, interpolate: false } : section),
   }
   const dependencies = sectionToolDependencies(catalog, policy)
+  // A host that owns the declarations hands over no list to filter: there the
+  // step admission is what hides an inactive tool (admission-gating.ts), and the
+  // host merges its own schemas after this waterfall. Returning the presentation
+  // without a list is exactly what such a host expects, so the older type — which
+  // still requires one — is the only thing the cast is for.
+  const declarations = assembly.tools
   return {
     ...assembly,
-    tools: deferDeclarations
-      ? deferredToolSchemas(assembly.tools, policy)
-      : assembly.tools.filter(tool => enabledNames.has(tool.name)),
+    ...(declarations === undefined
+      ? {}
+      : {
+          tools: deferDeclarations
+            ? deferredToolSchemas(declarations, policy)
+            : declarations.filter(tool => enabledNames.has(tool.name)),
+        }),
     sections: prepared.sections.filter(section => !Object.hasOwn(dependencies, section.name) && section.name !== 'tools:sdk'),
     variables: {
       ...assembly.variables,
       tool_activator_context: activationPrompt(prepared, catalog, policy, enabledNames, skillInstructions),
     },
-  }
+  } as PromptAssembly
 }
 
 /**

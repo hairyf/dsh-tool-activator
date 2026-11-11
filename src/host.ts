@@ -9,9 +9,10 @@ import type { ToolExecution, ToolExecutionResult, ToolExecutionToken, ToolRunCon
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type { ToolActivatorConfig } from './config'
 import type { ToolPolicy } from './shared'
-import type { ActivateToolsParams, ActivationEnvelope, ActivationHistory, ActivationReceipt, ActivationResult, ToolCatalogItem } from './types'
+import type { ActivateToolsParams, ActivationEnvelope, ActivationHistory, ActivationReceipt, ActivationResult, AssembledPrompt, ToolCatalogItem } from './types'
 import { createDeveloperMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { activationContent, activationEnvelope, activationHistorySchema, parseActivation } from './activation'
+import { createToolHiding } from './admission-gating'
 import { buildToolCatalog, enabledToolNames } from './catalog'
 import { validatePolicy } from './config'
 import { ACTIVATION_CONTEXT_NAME, ACTIVATION_CONTEXT_ORDER, ACTIVATION_PRODUCER, ACTIVATION_PROJECTION_KEY, ACTIVATION_VERSION, ACTIVATOR_SOURCE_KIND, ACTIVATOR_TOOL_NAME } from './constants'
@@ -59,6 +60,32 @@ interface AnnouncementState {
   stepOpen: boolean
 }
 
+/**
+ * Hosts from dsh 0.2.2 on hand the assembly waterfall a presentation and merge the
+ * provider-owned tool schemas afterwards, so this plugin can no longer hide tool
+ * declarations there. Say so once rather than on every agent.
+ */
+let reportedDeclarationsUnavailable = false
+/**
+ * A host that owns the declarations and exposes no step admission leaves the plugin
+ * nowhere to hide an un-activated tool: the model would see all of them.
+ */
+let reportedMissingAdmission = false
+
+function reportDeclarationsUnavailable(): void {
+  if (reportedDeclarationsUnavailable)
+    return
+  reportedDeclarationsUnavailable = true
+  console.warn('[dsh-tool-activator] prompt assembly no longer carries tool declarations (dsh >= 0.2.2); inactive tools are hidden by narrowing the step admission instead of by filtering the assembly')
+}
+
+function reportMissingAdmission(): void {
+  if (reportedMissingAdmission)
+    return
+  reportedMissingAdmission = true
+  console.warn('[dsh-tool-activator] this host owns the tool declarations and exposes no tool admission (tools.resolve); inactive tools cannot be hidden from the model')
+}
+
 /** Fold one session event into what this session's head already declares. */
 function foldAnnouncement(state: AnnouncementState, event: SessionEvent): void {
   if (event.type === 'request/header') {
@@ -98,6 +125,58 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
   const executions = new Map<ToolExecutionToken, ActivationExecution>()
   const receipts = new Map<string, PtcReceipt>()
   const announcements = new Map<string, AnnouncementState>()
+  const hiding = createToolHiding(ctx)
+  // An agent's enabled set only grows: activations are permanent, and the catalog
+  // that feeds this reads a projection the commit folds on its own schedule. Without
+  // the union, an assembly that runs before that fold would re-hide the tool the
+  // commit just declared — visible as "I activated it and it disappeared".
+  const enabledSeen = new WeakMap<Agent, Set<string>>()
+
+  /**
+   * Install the hiding gate for one agent, never narrowing what it already saw. The
+   * merged set is returned: the prompt has to present exactly what the gate lets
+   * the model call, or a tool the gate keeps would be offered as inactive.
+   */
+  function applyHiding(agent: Agent, catalog: ToolCatalogItem[], enabled: ReadonlySet<string>): Set<string> {
+    const previous = enabledSeen.get(agent)
+    const merged = new Set(enabled)
+    if (previous !== undefined) {
+      for (const name of previous)
+        merged.add(name)
+    }
+    enabledSeen.set(agent, merged)
+    hiding.sync(agent, catalog, merged)
+    return merged
+  }
+
+  // Latched from the first assembly: hosts that own tool declarations hand the
+  // waterfall a presentation without them, and only those need hiding by
+  // restriction. `undefined` means no assembly has revealed the host yet.
+  let declarationsOwned: boolean | undefined
+  // Learn the host's declaration contract once, before any agent exists: whether the
+  // waterfall still receives `tools` decides if hiding is even needed, and the first
+  // turn has to know it too. A scope-less assembly is enough to tell.
+  const probe = ctx.on('system-prompt/assemble', async (assembly, _context, next) => {
+    declarationsOwned ??= Array.isArray((assembly as AssembledPrompt).tools)
+    return next()
+  }, { prepend: true })
+  void Promise.resolve()
+    .then(async () => ctx.systemPrompt.assemble({}))
+    .catch(() => { })
+    .finally(() => probe())
+  // A step resolves its tool set BEFORE it assembles, so an agent that already
+  // existed when this plugin loaded (a restored session) would spend its first
+  // step with every tool admitted — the assembly hook then narrows them, which is
+  // the one-step-late "tools added, then removed" flicker. Resolving the
+  // allow-list inside the admission instead makes the first resolution correct no
+  // matter who created the agent or when this plugin loaded.
+  hiding.setGateResolver((agent) => {
+    if (declarationsOwned === true)
+      return
+    const policy = policySnapshot()
+    const catalog = catalogOf(agent, policy)
+    applyHiding(agent, catalog, enabledToolNames(catalog, policy, activatedHistoryOf(agent).activatedToolIds))
+  })
   let approval: Context['approval'] | undefined
   let skills: Context['skills'] | undefined
   ctx.inject(['approval'], (owner) => {
@@ -149,9 +228,13 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     if (context.scope !== agent)
       throw new Error('dsh-tool-activator requires the exact agent scope for prompt assembly')
     context.signal?.throwIfAborted()
+    // `tools` rides along only on hosts that still let this waterfall own the
+    // declarations; newer hosts merge the provider-owned schemas afterwards.
+    const ownsDeclarations = Array.isArray((assembly as AssembledPrompt).tools)
+    declarationsOwned = ownsDeclarations
     const catalog = catalogOf(agent, policy)
     const history = historyOf(agent)
-    const enabled = enabledToolNames(catalog, policy, history.activatedToolIds)
+    const computed = enabledToolNames(catalog, policy, history.activatedToolIds)
     if (ctx.tools.get(ACTIVATOR_TOOL_NAME, agent) === undefined) {
       // Nothing named activate_tools is visible in this scope — a restriction
       // denied it or the host never exposed it. Hiding the discoverable tools
@@ -160,6 +243,15 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
       // merely shadows ours, and filtering stays correct there because the model
       // still has something to call under that name.
       return assembly
+    }
+    // On a host that owns the declarations the gate is what hides an inactive
+    // tool, so the prompt presents exactly what the gate admits; a host that
+    // still hands over the declarations filters them here instead.
+    const enabled = ownsDeclarations ? computed : applyHiding(agent, catalog, computed)
+    if (!ownsDeclarations) {
+      reportDeclarationsUnavailable()
+      if (!hiding.installed)
+        reportMissingAdmission()
     }
     const instructions = enabled.has('skill') && ctx.tools.get('skill', agent)
       ? history.activatedSkills.flatMap(skill => skill.instructions === undefined ? [] : [skill.instructions])
@@ -193,7 +285,10 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     }
     return undefined
   })
-  ctx.on('agent/disposed', ({ agent }) => clearAgent(agent))
+  ctx.on('agent/disposed', ({ agent }) => {
+    hiding.forget(agent)
+    clearAgent(agent)
+  })
   ctx.on('session/event', (session, event) => {
     const state = announcements.get(session.id)
     if (state)
@@ -305,6 +400,20 @@ export function installToolActivator(ctx: Context, config: ToolActivatorConfig):
     if (!history)
       throw new Error('dsh-tool-activator activation projection is unavailable')
     return history
+  }
+
+  /**
+   * The activation history this session recovered. An empty history is the safe
+   * answer: the gate then hides what was never activated, and the next assembly
+   * widens it from the recovered history.
+   */
+  function activatedHistoryOf(agent: Agent): ActivationHistory {
+    try {
+      return historyOf(agent)
+    }
+    catch {
+      return emptyActivationHistory()
+    }
   }
 
   function catalogOf(agent: Agent, policy: ToolPolicy): ToolCatalogItem[] {

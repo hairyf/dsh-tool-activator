@@ -1,10 +1,23 @@
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type { ToolGroup } from './shared'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     'tool-activator': { kind: 'tool-activator' }
   }
+}
+
+/**
+ * The assembly the `system-prompt/assemble` waterfall receives.
+ *
+ * Hosts from dsh 0.2.2 on own the tool declarations: they merge the
+ * provider-owned schemas after the waterfall, so the presentation handed to it
+ * carries no `tools` list at all. Everything else in the contract is unchanged,
+ * which is why only that one field is optional here.
+ */
+export interface AssembledPrompt extends Omit<PromptAssembly, 'tools'> {
+  tools?: ToolSchema[]
 }
 
 export interface ActivateToolsParams {
